@@ -19,3 +19,7 @@ thiserror.workspace = true
 [build-dependencies]
 slint-build.workspace = true
 
+[dev-dependencies]
+i-slint-backend-testing = { version = "=1.18.1", features = ["renderer-software"] }
+image.workspace = true
+

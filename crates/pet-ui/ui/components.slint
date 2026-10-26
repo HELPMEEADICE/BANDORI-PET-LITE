@@ -1,0 +1,162 @@
+import { Palette } from "std-widgets.slint";
+
+export global Colors {
+    out property <bool> dark: Palette.background == #1c1c1c;
+    out property <color> canvas: dark ? #1f1f1f : #f7f7f9;
+    out property <color> sidebar: dark ? #181818 : #ffffff;
+    out property <color> panel: dark ? #242225 : #ffffff;
+    out property <color> card: dark ? #303030 : #ffffff;
+    out property <color> border: dark ? #3c373e : #e4dfe5;
+    out property <color> text: dark ? #ffffff : #25232a;
+    out property <color> muted: dark ? #a7b0bf : #687385;
+    out property <color> accent: dark ? #ff568e : #e4004f;
+    out property <color> soft: dark ? #511c32 : #ffe5ee;
+    out property <color> hover: dark ? #343036 : #f5edf1;
+}
+
+export component Body inherits Text {
+    color: Colors.text;
+    font-size: 14px;
+    vertical-alignment: center;
+    overflow: elide;
+}
+
+export component Hint inherits Body {
+    color: Colors.muted;
+    font-size: 13px;
+    wrap: word-wrap;
+}
+
+export component Heading inherits Body {
+    font-size: 15px;
+    font-weight: 700;
+}
+
+export component Panel inherits Rectangle {
+    background: Colors.panel;
+    border-color: Colors.border;
+    border-width: 1px;
+    border-radius: 16px;
+}
+
+export component ActionButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    callback clicked();
+    min-height: 34px;
+    min-width: 64px;
+    vertical-stretch: 0;
+    border-radius: 5px;
+    background: primary ? (touch.has-hover ? #ff8ab0 : #ff79a3) : (touch.has-hover ? Colors.hover : Colors.card);
+    border-width: primary ? 0px : 1px;
+    border-color: focus.has-focus ? Colors.accent : Colors.border;
+    opacity: enabled ? 1 : 0.45;
+    accessible-role: button;
+    accessible-label: text;
+    accessible-enabled: enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    Body {
+        width: parent.width;
+        height: parent.height;
+        text: root.text;
+        color: root.primary ? #201018 : Colors.text;
+        horizontal-alignment: center;
+    }
+    focus := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == " " || event.text == "\n" { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { focus.focus(); root.clicked(); }
+    }
+}
+
+export component ToggleRow inherits Rectangle {
+    in property <string> text;
+    in property <string> hint;
+    in property <bool> checked;
+    callback toggled(bool);
+    height: hint == "" ? 34px : 53px;
+    background: transparent;
+    accessible-role: checkbox;
+    accessible-label: text;
+    accessible-checked: checked;
+    accessible-action-default => { root.toggled(!root.checked); }
+    HorizontalLayout {
+        spacing: 12px;
+        VerticalLayout {
+            spacing: 3px;
+            alignment: center;
+            Body { text: root.text; }
+            if root.hint != "" : Hint { text: root.hint; font-size: 12px; }
+        }
+        Rectangle {
+            width: 40px;
+            height: 21px;
+            border-radius: 11px;
+            border-width: 1px;
+            border-color: focus.has-focus ? Colors.accent : (root.checked ? Colors.accent : #999999);
+            background: root.checked ? Colors.accent : transparent;
+            Rectangle {
+                x: root.checked ? 23px : 4px;
+                y: 4px;
+                width: 13px;
+                height: 13px;
+                border-radius: 7px;
+                background: root.checked ? #ffffff : #cecece;
+                animate x { duration: 120ms; }
+            }
+        }
+        Body { text: root.checked ? "On" : "Off"; width: 24px; font-size: 13px; }
+    }
+    focus := FocusScope {
+        key-pressed(event) => {
+            if event.text == " " { root.toggled(!root.checked); return accept; }
+            return reject;
+        }
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { focus.focus(); root.toggled(!root.checked); }
+    }
+}
+
+export component NavButton inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <color> tint;
+    in property <bool> active;
+    callback clicked();
+    height: 45px;
+    border-radius: 10px;
+    background: active ? Colors.soft : (touch.has-hover ? Colors.hover : Colors.panel);
+    border-width: 1px;
+    border-color: active || focus.has-focus ? Colors.accent : Colors.border;
+    accessible-role: button;
+    accessible-label: text;
+    accessible-action-default => { root.clicked(); }
+    if active : Rectangle { x: -4px; y: 9px; width: 4px; height: 27px; border-radius: 2px; background: #f00063; }
+    Rectangle {
+        x: 10px;
+        y: (parent.height - self.height) / 2;
+        width: 29px;
+        height: 29px;
+        border-radius: 9px;
+        background: root.active ? #f00063 : root.tint.with-alpha(0.18);
+        Image { x: 5px; y: 5px; width: 19px; height: 19px; source: root.icon; image-fit: contain; colorize: root.active ? #ffffff : root.tint; }
+    }
+    Body { x: 49px; width: parent.width - 59px; height: parent.height; text: root.text; font-weight: root.active ? 700 : 400; }
+    focus := FocusScope {
+        key-pressed(event) => {
+            if event.text == " " || event.text == "\n" { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { focus.focus(); root.clicked(); } }
+}

@@ -1,53 +1,20 @@
-import { Button, CheckBox, ComboBox, LineEdit, ListView, ScrollView, Slider } from "std-widgets.slint";
+import { ComboBox, LineEdit, ListView, ScrollView, Slider, Palette } from "std-widgets.slint";
+import { Colors, Body, Hint, Heading, Panel, ActionButton, ToggleRow, NavButton } from "components.slint";
 
-export struct CharacterItem {
-    key: string,
-    display: string,
-    band: string,
-    costume-count: int,
-    selected: bool,
-}
-
-export struct RegionRow {
-    region: string,
-    title: string,
-    motion-index: int,
-    expression-index: int,
-}
-
-export struct AboutLine {
-    label: string,
-    value: string,
-}
-
-component TabButton inherits Rectangle {
-    in property <string> text;
-    in property <bool> active;
-    callback clicked();
-    height: 34px;
-    width: 132px;
-    border-radius: 8px;
-    background: active ? #e4004f : transparent;
-    Text {
-        text: root.text;
-        color: root.active ? #ffffff : #b9bdc7;
-        font-size: 13px;
-        font-weight: active ? 600 : 400;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-    TouchArea {
-        clicked => { root.clicked(); }
-    }
-}
+export struct CharacterItem { key: string, display: string, band: string, costume-count: int, selected: bool }
+export struct RegionRow { region: string, title: string, motion-index: int, expression-index: int }
+export struct AboutLine { label: string, value: string }
 
 export component SettingsWindow inherits Window {
-    title: "BANDORI-PET-LITE 设置";
-    preferred-width: 960px;
+    title: "Bandori 桌宠 LITE - 设置";
+    icon: @image-url("../../../assets/icons/bandori.png");
+    preferred-width: 1180px;
     preferred-height: 680px;
-    min-width: 780px;
-    min-height: 560px;
-    background: #14141a;
+    min-width: 1080px;
+    min-height: 620px;
+    default-font-family: "Microsoft YaHei UI";
+    default-font-size: 14px;
+    background: Colors.canvas;
 
     in-out property <int> page: 0;
     in property <[CharacterItem]> characters;
@@ -60,15 +27,21 @@ export component SettingsWindow inherits Window {
     in property <[string]> quality-labels: ["省电", "均衡"];
     in property <[string]> theme-labels: ["浅色", "深色", "跟随系统"];
     in property <[string]> preset-labels: ["自动选择", "元气开朗", "傲娇", "害羞内向", "冷静理智", "惊讶意外", "随机"];
-
+    in property <[AboutLine]> active-models;
+    in property <image> portrait;
+    in property <bool> has-portrait;
+    in property <string> active-character-label: "尚未选择角色";
+    in property <string> active-costume-label;
+    in property <string> active-band;
+    in property <bool> has-model;
+    in-out property <bool> picking-model: false;
     in-out property <string> search;
     in-out property <string> selected-character;
     in-out property <string> selected-costume;
     in-out property <string> selected-character-label;
     in-out property <string> model-info;
-    in-out property <string> status;
+    in-out property <string> status: "正在连接桌宠进程…";
     in-out property <bool> first-run;
-
     in-out property <int> fps: 120;
     in-out property <float> window-opacity: 100;
     in-out property <int> scale: 100;
@@ -76,7 +49,6 @@ export component SettingsWindow inherits Window {
     in-out property <bool> vsync: true;
     in-out property <bool> gpu: true;
     in-out property <int> theme: 2;
-
     in-out property <bool> drag-locked: true;
     in-out property <bool> head-tracking: true;
     in-out property <bool> mutual-gaze: false;
@@ -86,12 +58,17 @@ export component SettingsWindow inherits Window {
     in-out property <bool> obs: false;
     in-out property <bool> topmost: false;
     in-out property <bool> autostart: false;
+    in-out property <bool> hide-model: false;
+    in-out property <bool> move-together: false;
     in-out property <int> preset-index: 0;
+    in property <int> poke-motion-index;
+    in property <int> poke-expression-index;
     in-out property <string> poke-motion;
     in-out property <string> poke-expression;
 
     callback apply-selection(string, string);
     callback select-character(string);
+    callback search-characters(string);
     callback patch-number(string, float);
     callback patch-bool(string, bool);
     callback patch-string(string, string);
@@ -100,428 +77,378 @@ export component SettingsWindow inherits Window {
     callback reset-positions();
     callback open-folder();
 
-    VerticalLayout {
-        padding: 18px;
-        spacing: 14px;
+    init => { Palette.color-scheme = root.theme == 0 ? ColorScheme.light : (root.theme == 1 ? ColorScheme.dark : ColorScheme.unknown); }
+    changed theme => { Palette.color-scheme = root.theme == 0 ? ColorScheme.light : (root.theme == 1 ? ColorScheme.dark : ColorScheme.unknown); }
 
-        HorizontalLayout {
-            spacing: 12px;
-            Text {
-                text: "BANDORI-PET-LITE";
-                color: #ffffff;
-                font-size: 18px;
-                font-weight: 700;
-                vertical-alignment: center;
-            }
-            Rectangle { horizontal-stretch: 1; }
-            Text {
-                text: root.status;
-                color: #8f949e;
-                font-size: 12px;
-                vertical-alignment: center;
-            }
-        }
-
-        if root.first-run : Rectangle {
-            height: 34px;
-            border-radius: 8px;
-            background: #3a2330;
-            Text {
-                x: 12px;
-                text: "还没有可用的模型：请先在「角色与模型」里选择一个角色。";
-                color: #ffd7e4;
-                font-size: 12px;
-                vertical-alignment: center;
-            }
-        }
-
-        HorizontalLayout {
-            spacing: 8px;
-            TabButton { text: "角色与模型"; active: root.page == 0; clicked => { root.page = 0; } }
-            TabButton { text: "显示与性能"; active: root.page == 1; clicked => { root.page = 1; } }
-            TabButton { text: "交互与动作"; active: root.page == 2; clicked => { root.page = 2; } }
-            TabButton { text: "关于"; active: root.page == 3; clicked => { root.page = 3; } }
-            Rectangle { horizontal-stretch: 1; }
-        }
-
-        // ── Page 0: characters & models ────────────────────────────────────────
-        if root.page == 0 : HorizontalLayout {
-            spacing: 14px;
-
-            Rectangle {
-                width: 320px;
-                background: #1d1d24;
-                border-radius: 10px;
-                VerticalLayout {
-                    padding: 12px;
-                    spacing: 8px;
-                    Text {
-                        text: "角色";
-                        color: #f2f3f5;
-                        font-size: 13px;
-                        font-weight: 600;
-                    }
-                    LineEdit {
-                        placeholder-text: "搜索角色 / 乐队";
-                        text <=> root.search;
-                        edited(text) => { root.search = text; }
-                    }
-                    ListView {
-                        for character[index] in root.characters : Rectangle {
-                            height: 46px;
-                            border-radius: 8px;
-                            background: character.selected ? #2c2130 : (character-touch.has-hover ? #23232c : transparent);
-                            VerticalLayout {
-                                padding-left: 10px;
-                                padding-right: 10px;
-                                Text {
-                                    text: character.display;
-                                    color: character.selected ? #ffd7e4 : #e8e9ee;
-                                    font-size: 13px;
-                                    vertical-alignment: center;
-                                }
-                                Text {
-                                    text: character.band + " · " + character.costume-count + " 套";
-                                    color: #7f848e;
-                                    font-size: 10px;
-                                }
-                            }
-                            character-touch := TouchArea {
-                                clicked => {
-                                    root.selected-character = character.key;
-                                    root.selected-character-label = character.display;
-                                    root.select-character(character.key);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Rectangle {
-                horizontal-stretch: 1;
-                background: #1d1d24;
-                border-radius: 10px;
-                VerticalLayout {
-                    padding: 12px;
-                    spacing: 8px;
-                    Text {
-                        text: root.selected-character-label + " · 服装";
-                        color: #f2f3f5;
-                        font-size: 13px;
-                        font-weight: 600;
-                    }
-                    ListView {
-                        for label[index] in root.costume-labels : Rectangle {
-                            height: 40px;
-                            border-radius: 8px;
-                            background: root.selected-costume == root.costume-ids[index] ? #2c2130 : (costume-touch.has-hover ? #23232c : transparent);
-                            Text {
-                                x: 10px;
-                                text: label;
-                                color: root.selected-costume == root.costume-ids[index] ? #ffd7e4 : #d6d8de;
-                                font-size: 12px;
-                                vertical-alignment: center;
-                            }
-                            costume-touch := TouchArea {
-                                clicked => { root.selected-costume = root.costume-ids[index]; }
-                            }
-                        }
-                    }
-                    HorizontalLayout {
-                        spacing: 8px;
-                        Button {
-                            text: "应用并切换";
-                            clicked => { root.apply-selection(root.selected-character, root.selected-costume); }
-                        }
-                        Button {
-                            text: "打开模型目录";
-                            clicked => { root.open-folder(); }
-                        }
-                    }
-                    Text {
-                        text: root.model-info;
-                        color: #8f949e;
-                        font-size: 11px;
-                        wrap: word-wrap;
-                    }
-                }
-            }
-        }
-
-        // ── Page 1: display & performance ──────────────────────────────────────
-        if root.page == 1 : ScrollView {
+    HorizontalLayout {
+        spacing: 0px;
+        Rectangle {
+            width: 210px;
+            background: Colors.sidebar;
             VerticalLayout {
-                spacing: 12px;
-                Rectangle {
-                    background: #1d1d24;
-                    border-radius: 10px;
-                    height: content.min-height;
-                    content := VerticalLayout {
-                        padding: 14px;
-                        spacing: 12px;
-                        Text { text: "渲染"; color: #f2f3f5; font-size: 13px; font-weight: 600; }
-                        HorizontalLayout {
-                            spacing: 10px;
-                            Text { text: "画质档位"; color: #b9bdc7; font-size: 12px; width: 120px; vertical-alignment: center; }
-                            ComboBox {
-                                model: root.quality-labels;
-                                current-index: root.quality;
-                                selected(value) => {
-                                    root.quality = value == "均衡" ? 1 : 0;
-                                    root.patch-string("live2d_quality", value == "均衡" ? "balanced" : "performance");
-                                }
-                                width: 160px;
-                            }
-                            Text {
-                                text: "省电 = 0.75× 渲染分辨率；均衡 = 原生分辨率";
-                                color: #7f848e;
-                                font-size: 11px;
-                                vertical-alignment: center;
-                            }
-                        }
-                        HorizontalLayout {
-                            spacing: 10px;
-                            Text { text: "刷新率"; color: #b9bdc7; font-size: 12px; width: 120px; vertical-alignment: center; }
-                            Slider {
-                                minimum: 30;
-                                maximum: 240;
-                                step: 10;
-                                value: root.fps;
-                                changed(value) => { root.fps = round(value); root.patch-number("fps", round(value)); }
-                                horizontal-stretch: 1;
-                            }
-                            Text { text: root.fps + " FPS"; color: #e8e9ee; font-size: 12px; width: 70px; vertical-alignment: center; }
-                        }
-                        HorizontalLayout {
-                            spacing: 10px;
-                            Text { text: "模型缩放"; color: #b9bdc7; font-size: 12px; width: 120px; vertical-alignment: center; }
-                            Slider {
-                                minimum: 25;
-                                maximum: 500;
-                                step: 5;
-                                value: root.scale;
-                                changed(value) => { root.scale = round(value); root.patch-number("live2d_scale", round(value)); }
-                                horizontal-stretch: 1;
-                            }
-                            Text { text: root.scale + " %"; color: #e8e9ee; font-size: 12px; width: 70px; vertical-alignment: center; }
-                        }
-                        HorizontalLayout {
-                            spacing: 10px;
-                            Text { text: "不透明度"; color: #b9bdc7; font-size: 12px; width: 120px; vertical-alignment: center; }
-                            Slider {
-                                minimum: 20;
-                                maximum: 100;
-                                step: 5;
-                                value: root.window-opacity;
-                                changed(value) => { root.window-opacity = value; root.patch-number("opacity", value / 100.0); }
-                                horizontal-stretch: 1;
-                            }
-                            Text { text: round(root.window-opacity) + " %"; color: #e8e9ee; font-size: 12px; width: 70px; vertical-alignment: center; }
-                        }
-                        HorizontalLayout {
-                            spacing: 18px;
-                            CheckBox {
-                                text: "垂直同步";
-                                checked: root.vsync;
-                                toggled => { root.vsync = !root.vsync; root.patch-bool("vsync", root.vsync); }
-                            }
-                            CheckBox {
-                                text: "GPU 加速（下次启动生效）";
-                                checked: root.gpu;
-                                toggled => { root.gpu = !root.gpu; root.patch-bool("gpu_acceleration", root.gpu); }
-                            }
-                        }
-                        HorizontalLayout {
-                            spacing: 10px;
-                            Text { text: "主题"; color: #b9bdc7; font-size: 12px; width: 120px; vertical-alignment: center; }
-                            ComboBox {
-                                model: root.theme-labels;
-                                current-index: root.theme;
-                                selected(value) => {
-                                    root.theme = value == "浅色" ? 0 : (value == "深色" ? 1 : 2);
-                                    root.patch-string("dark_theme", value == "浅色" ? "off" : (value == "深色" ? "on" : "system"));
-                                }
-                                width: 160px;
-                            }
-                        }
-                        Button {
-                            text: "重置所有角色位置";
-                            clicked => { root.reset-positions(); }
-                        }
-                    }
-                }
-                Rectangle { height: 1px; background: transparent; }
-            }
-        }
-
-        // ── Page 2: interaction & actions ──────────────────────────────────────
-        if root.page == 2 : ScrollView {
-            VerticalLayout {
-                spacing: 12px;
-                Rectangle {
-                    background: #1d1d24;
-                    border-radius: 10px;
-                    height: behavior-box.min-height;
-                    behavior-box := VerticalLayout {
-                        padding: 14px;
-                        spacing: 8px;
-                        Text { text: "交互"; color: #f2f3f5; font-size: 13px; font-weight: 600; }
-                        CheckBox {
-                            text: "拖拽锁定（开启后无法拖动桌宠）";
-                            checked: root.drag-locked;
-                            toggled => { root.drag-locked = !root.drag-locked; root.patch-bool("drag_locked", root.drag-locked); }
-                        }
-                        CheckBox {
-                            text: "看向鼠标";
-                            checked: root.head-tracking;
-                            toggled => { root.head-tracking = !root.head-tracking; root.patch-bool("live2d_head_tracking_enabled", root.head-tracking); }
-                        }
-                        CheckBox {
-                            text: "角色对视";
-                            checked: root.mutual-gaze;
-                            toggled => { root.mutual-gaze = !root.mutual-gaze; root.patch-bool("live2d_mutual_gaze_enabled", root.mutual-gaze); }
-                        }
-                        CheckBox {
-                            text: "角色待机动作";
-                            checked: root.idle-actions;
-                            toggled => { root.idle-actions = !root.idle-actions; root.patch-bool("live2d_idle_actions_enabled", root.idle-actions); }
-                        }
-                        CheckBox {
-                            text: "启用随机动作";
-                            checked: root.random-actions;
-                            toggled => { root.random-actions = !root.random-actions; root.patch-bool("live2d_random_actions_enabled", root.random-actions); }
-                        }
-                        CheckBox {
-                            text: "本地情绪位移";
-                            checked: root.emotion;
-                            toggled => { root.emotion = !root.emotion; root.patch-bool("emotion_behavior_enabled", root.emotion); }
-                        }
-                        CheckBox {
-                            text: "游戏置顶兼容";
-                            checked: root.topmost;
-                            toggled => { root.topmost = !root.topmost; root.patch-bool("game_topmost", root.topmost); }
-                        }
-                        CheckBox {
-                            text: "OBS 采集兼容";
-                            checked: root.obs;
-                            toggled => { root.obs = !root.obs; root.patch-bool("obs_window_capture_compatible", root.obs); }
-                        }
-                        CheckBox {
-                            text: "开机自启动";
-                            checked: root.autostart;
-                            toggled => { root.autostart = !root.autostart; root.patch-bool("auto_start", root.autostart); }
-                        }
-                    }
-                }
-
-                Rectangle {
-                    background: #1d1d24;
-                    border-radius: 10px;
-                    height: region-box.min-height;
-                    region-box := VerticalLayout {
-                        padding: 14px;
-                        spacing: 8px;
-                        Text { text: "点击动作反馈（7 个身体部位）"; color: #f2f3f5; font-size: 13px; font-weight: 600; }
-                        HorizontalLayout {
-                            spacing: 10px;
-                            Text { text: "预设"; color: #b9bdc7; font-size: 12px; width: 120px; vertical-alignment: center; }
-                            ComboBox {
-                                model: root.preset-labels;
-                                current-index: root.preset-index;
-                                selected(value) => {
-                                    root.preset-index = value == "自动选择" ? 0 : (value == "元气开朗" ? 1 : (value == "傲娇" ? 2 : (value == "害羞内向" ? 3 : (value == "冷静理智" ? 4 : (value == "惊讶意外" ? 5 : 6)))));
-                                }
-                                width: 160px;
-                            }
-                            Button {
-                                text: "套用预设";
-                                clicked => {
-                                    root.apply-preset(root.preset-index == 0 ? "auto" : (root.preset-index == 1 ? "genki" : (root.preset-index == 2 ? "tsundere" : (root.preset-index == 3 ? "shy" : (root.preset-index == 4 ? "cool" : (root.preset-index == 5 ? "surprised" : "random"))))));
-                                }
-                            }
-                            Text {
-                                text: "预设会按当前模型解析成具体动作并保存";
-                                color: #7f848e;
-                                font-size: 11px;
-                                vertical-alignment: center;
-                            }
-                        }
-                        for row[index] in root.regions : HorizontalLayout {
-                            spacing: 8px;
-                            Text {
-                                text: row.title;
-                                color: #b9bdc7;
-                                font-size: 12px;
-                                width: 150px;
-                                vertical-alignment: center;
-                            }
-                            ComboBox {
-                                model: root.motion-options;
-                                current-index: row.motion-index;
-                                selected(value) => { root.edit-region(index, "motion", value); }
-                                width: 190px;
-                            }
-                            ComboBox {
-                                model: root.expression-options;
-                                current-index: row.expression-index;
-                                selected(value) => { root.edit-region(index, "expression", value); }
-                                width: 190px;
-                            }
-                        }
-                        HorizontalLayout {
-                            spacing: 10px;
-                            Text { text: "戳一戳动作"; color: #b9bdc7; font-size: 12px; width: 150px; vertical-alignment: center; }
-                            ComboBox {
-                                model: root.motion-options;
-                                selected(value) => {
-                                    root.poke-motion = value == "自动匹配" ? "" : (value == "随机动作" ? "__random__" : (value == "不触发" ? "__none__" : value));
-                                    root.patch-string("poke_motion", root.poke-motion);
-                                }
-                                width: 190px;
-                            }
-                            Text { text: "戳一戳表情"; color: #b9bdc7; font-size: 12px; width: 90px; vertical-alignment: center; }
-                            ComboBox {
-                                model: root.expression-options;
-                                selected(value) => {
-                                    root.poke-expression = value == "自动匹配" ? "" : (value == "不触发" ? "__none__" : value);
-                                    root.patch-string("poke_expression", root.poke-expression);
-                                }
-                                width: 190px;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── Page 3: about ──────────────────────────────────────────────────────
-        if root.page == 3 : ScrollView {
-            VerticalLayout {
+                padding: 10px;
+                padding-top: 14px;
                 spacing: 8px;
-                Rectangle {
-                    background: #1d1d24;
-                    border-radius: 10px;
-                    height: about-box.min-height;
-                    about-box := VerticalLayout {
-                        padding: 14px;
-                        spacing: 8px;
-                        Text { text: "关于 BANDORI-PET-LITE"; color: #f2f3f5; font-size: 13px; font-weight: 600; }
-                        for line[index] in root.about-lines : HorizontalLayout {
-                            spacing: 10px;
-                            Text { text: line.label; color: #8f949e; font-size: 12px; width: 110px; }
-                            Text { text: line.value; color: #d6d8de; font-size: 12px; wrap: word-wrap; horizontal-stretch: 1; }
+                HorizontalLayout {
+                    padding-left: 5px;
+                    padding-bottom: 8px;
+                    spacing: 7px;
+                    height: 41px;
+                    Image { source: @image-url("../../../assets/icons/bandori.png"); width: 28px; height: 32px; image-fit: contain; }
+                    Heading { text: "导航"; horizontal-stretch: 1; }
+                }
+                NavButton { text: "角色列表"; icon: @image-url("icons/characters.svg"); tint: #ff568e; active: root.page == 0; clicked => { root.page = 0; } }
+                NavButton { text: "角色行为"; icon: @image-url("icons/behavior.svg"); tint: #ff902c; active: root.page == 2; clicked => { root.page = 2; } }
+                NavButton { text: "显示设置"; icon: @image-url("icons/display.svg"); tint: #00d976; active: root.page == 1; clicked => { root.page = 1; } }
+                NavButton { text: "关于"; icon: @image-url("icons/about.svg"); tint: #a7b0bf; active: root.page == 3; clicked => { root.page = 3; } }
+                Rectangle { vertical-stretch: 1; background: transparent; }
+                Hint { text: "BANDORI-PET-LITE"; font-size: 11px; horizontal-alignment: center; }
+                Hint { text: "轻量桌宠 · 与你相伴"; font-size: 11px; horizontal-alignment: center; }
+                Rectangle { height: 4px; background: transparent; }
+            }
+        }
+        Rectangle { width: 1px; background: Colors.border; }
+
+        VerticalLayout {
+            padding-left: 34px;
+            padding-right: 28px;
+            padding-top: 20px;
+            padding-bottom: 14px;
+            spacing: 16px;
+            if root.first-run : Rectangle {
+                height: 36px;
+                background: Colors.soft;
+                border-radius: 7px;
+                Body { x: 12px; width: parent.width - 24px; text: "欢迎使用 Bandori 桌宠，请选择角色与服装；模型文件放入 models 目录。"; font-size: 12px; }
+            }
+
+            if root.page == 0 : HorizontalLayout {
+                spacing: 32px;
+                VerticalLayout {
+                    spacing: 16px;
+                    Body { text: root.picking-model ? "选择角色 / 服装" : "Live2D 模型详情"; font-size: 28px; font-weight: 700; horizontal-alignment: center; height: 36px; }
+                    Body { text: root.picking-model ? "选择已有角色及服装，应用后即可切换。" : "点击切换按钮修改角色 / 服装。"; font-size: 18px; font-weight: 700; horizontal-alignment: center; height: 28px; }
+
+                    if !root.picking-model : HorizontalLayout {
+                        spacing: 12px;
+                        alignment: start;
+                        portrait-card := Panel {
+                            preferred-width: 280px;
+                            min-width: 220px;
+                            horizontal-stretch: 0.95;
+                            background: Colors.card;
+                            clip: true;
+                            preferred-height: 420px;
+                            min-height: 320px;
+                            max-height: 420px;
+                            VerticalLayout {
+                                padding: 20px;
+                                padding-top: 16px;
+                                spacing: 14px;
+                                portrait-frame := Rectangle {
+                                    background: transparent;
+                                    min-width: 0px;
+                                    min-height: 0px;
+                                    vertical-stretch: 1;
+                                    clip: true;
+                                    if root.has-portrait : portrait-image := Image {
+                                        x: 0px; y: 0px;
+                                        width: parent.width; height: parent.height;
+                                        source: root.portrait;
+                                        image-fit: contain;
+                                    }
+                                    if !root.has-portrait : VerticalLayout {
+                                        alignment: center;
+                                        spacing: 16px;
+                                        Image { source: @image-url("icons/characters.svg"); colorize: Colors.accent; height: 80px; image-fit: contain; }
+                                        Hint { text: root.has-model ? "此模型未提供角色立绘" : "选择一位角色，开始相伴"; horizontal-alignment: center; }
+                                    }
+                                }
+                                Body { text: root.active-character-label; font-size: 27px; font-weight: 700; horizontal-alignment: center; min-height: 38px; }
+                                Body { text: root.has-model ? "服装：" + root.active-costume-label : "还没有正在使用的模型"; font-size: 17px; font-weight: 600; wrap: word-wrap; horizontal-alignment: center; }
+                                Body { text: root.active-band == "" ? "" : "乐队：" + root.active-band; font-size: 13px; horizontal-alignment: center; }
+                            }
                         }
-                        Button { text: "打开模型目录"; clicked => { root.open-folder(); } }
-                        Text {
-                            text: "Live2D 运行时：Neocari（GPL-3.0-only）。模型与角色素材版权归 Craft Egg / Bushiroad 所有，本项目仅本地展示，不提供再分发。";
-                            color: #6f747e;
-                            font-size: 11px;
-                            wrap: word-wrap;
+                        action-card := Panel {
+                            preferred-width: 320px;
+                            min-width: 245px;
+                            horizontal-stretch: 1.05;
+                            preferred-height: 420px;
+                            min-height: 320px;
+                            max-height: 420px;
+                            clip: true;
+                            ScrollView {
+                                x: 9px; y: 12px; width: parent.width - 18px; height: parent.height - 24px;
+                                content-width: self.visible-width;
+                                VerticalLayout {
+                                    spacing: 13px;
+                                    padding: 2px;
+                                    Rectangle {
+                                        height: 132px;
+                                        background: transparent;
+                                        Rectangle {
+                                            width: 132px; height: 132px;
+                                            x: (parent.width - self.width) / 2;
+                                            border-radius: 66px;
+                                            background: switch-touch.has-hover ? #ff79a3 : Colors.accent;
+                                            Body { width: parent.width; height: parent.height; text: "切换\n角色/服装"; color: #ffffff; font-size: 18px; font-weight: 700; horizontal-alignment: center; }
+                                            switch-touch := TouchArea { mouse-cursor: pointer; clicked => { root.picking-model = true; } }
+                                            accessible-role: button;
+                                            accessible-label: "切换角色/服装";
+                                            accessible-action-default => { root.picking-model = true; }
+                                        }
+                                    }
+                                    Hint { text: "选择新的角色或服装"; horizontal-alignment: center; }
+                                    Heading { text: "戳一戳动作"; color: Colors.muted; horizontal-alignment: center; }
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        ComboBox { model: root.motion-options; current-index: root.poke-motion-index; enabled: root.has-model; selected(value) => { root.patch-string("poke_motion", value == "自动匹配" ? "" : (value == "随机动作" ? "__random__" : (value == "不触发" ? "__none__" : value))); } }
+                                        ActionButton { text: "默认"; width: 54px; enabled: root.has-model; clicked => { root.patch-string("poke_motion", ""); } }
+                                    }
+                                    Heading { text: "戳一戳表情"; color: Colors.muted; horizontal-alignment: center; }
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        ComboBox { model: root.expression-options; current-index: root.poke-expression-index; enabled: root.has-model; selected(value) => { root.patch-string("poke_expression", value == "自动匹配" ? "" : (value == "随机动作" ? "__random__" : (value == "不触发" ? "__none__" : value))); } }
+                                        ActionButton { text: "默认"; width: 54px; enabled: root.has-model; clicked => { root.patch-string("poke_expression", ""); } }
+                                    }
+                                    Heading { text: "点击动作反馈"; color: Colors.muted; horizontal-alignment: center; }
+                                    Hint { text: "为七个点击区域分别设置动作与表情，自动匹配会按区域选择合适反馈。"; horizontal-alignment: center; }
+                                    ActionButton { text: "配置点击动作反馈 →"; clicked => { root.page = 2; } }
+                                    Hint { text: root.model-info; font-size: 11px; horizontal-alignment: center; }
+                                }
+                            }
+                        }
+                    }
+
+                    if root.picking-model : Panel {
+                        VerticalLayout {
+                            padding: 15px;
+                            spacing: 12px;
+                            HorizontalLayout {
+                                spacing: 12px;
+                                ActionButton { text: "‹ 返回详情"; clicked => { root.picking-model = false; } }
+                                LineEdit { text <=> root.search; placeholder-text: "搜索角色 / 乐队"; edited(value) => { root.search-characters(value); } horizontal-stretch: 1; }
+                            }
+                            HorizontalLayout {
+                                spacing: 16px;
+                                VerticalLayout {
+                                    Heading { text: "角色"; }
+                                    ListView {
+                                        content-width: self.visible-width;
+                                        for character in root.characters : Rectangle {
+                                            height: 59px; border-radius: 8px;
+                                            background: root.selected-character == character.key ? Colors.soft : (character-touch.has-hover ? Colors.hover : transparent);
+                                            VerticalLayout {
+                                                padding: 9px; spacing: 4px;
+                                                Body { text: character.display; font-weight: 600; }
+                                                Hint { text: character.band + " · " + character.costume-count + " 套服装"; font-size: 11px; }
+                                            }
+                                            character-touch := TouchArea { mouse-cursor: pointer; clicked => { root.select-character(character.key); } }
+                                            accessible-role: button;
+                                            accessible-label: character.display;
+                                            accessible-action-default => { root.select-character(character.key); }
+                                        }
+                                    }
+                                    if root.characters.length == 0 : Hint { text: "未找到角色，请检查模型目录或搜索条件。"; }
+                                }
+                                Rectangle { width: 1px; background: Colors.border; }
+                                VerticalLayout {
+                                    Heading { text: root.selected-character-label == "" ? "服装" : root.selected-character-label + " · 服装"; }
+                                    ListView {
+                                        content-width: self.visible-width;
+                                        for label[index] in root.costume-labels : Rectangle {
+                                            height: 44px; border-radius: 7px;
+                                            background: root.selected-costume == root.costume-ids[index] ? Colors.soft : (costume-touch.has-hover ? Colors.hover : transparent);
+                                            Body { x: 10px; width: parent.width - 20px; text: label; font-size: 12px; }
+                                            costume-touch := TouchArea { mouse-cursor: pointer; clicked => { root.selected-costume = root.costume-ids[index]; } }
+                                            accessible-role: button;
+                                            accessible-label: label;
+                                            accessible-action-default => { root.selected-costume = root.costume-ids[index]; }
+                                        }
+                                    }
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: 10px;
+                                ActionButton { text: "✓  应用并切换"; primary: true; enabled: root.selected-character != "" && root.selected-costume != ""; clicked => { root.apply-selection(root.selected-character, root.selected-costume); } }
+                                ActionButton { text: "打开模型目录"; clicked => { root.open-folder(); } }
+                            }
+                        }
+                    }
+                    Rectangle { background: transparent; vertical-stretch: 1; }
+                }
+
+                Panel {
+                    width: 260px;
+                    ScrollView {
+                        x: 15px; y: 16px; width: parent.width - 30px; height: parent.height - 32px;
+                        content-width: self.visible-width;
+                        VerticalLayout {
+                            spacing: 10px;
+                            Heading { text: "设置"; }
+                            ToggleRow { text: "游戏置顶兼容"; checked: root.topmost; toggled(value) => { root.patch-bool("game_topmost", value); } }
+                            ToggleRow { text: "OBS 游戏采集兼容"; checked: root.obs; toggled(value) => { root.patch-bool("obs_window_capture_compatible", value); } }
+                            ToggleRow { text: "隐藏 Live2D 形象"; checked: root.hide-model; toggled(value) => { root.patch-bool("hide_live2d_model", value); } }
+                            ToggleRow { text: "开机自启动"; checked: root.autostart; toggled(value) => { root.patch-bool("auto_start", value); } }
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Body { text: "主题"; }
+                                ComboBox { min-width: 120px; model: root.theme-labels; current-index: root.theme; selected(value) => { root.theme = value == "浅色" ? 0 : (value == "深色" ? 1 : 2); root.patch-string("dark_theme", root.theme == 0 ? "off" : (root.theme == 1 ? "on" : "system")); } }
+                            }
+                            Hint { text: "设置修改后自动保存并应用"; font-size: 11px; }
+                            Rectangle { height: 8px; background: transparent; }
+                            Heading { text: "Live2D 模型列表"; }
+                            for item in root.active-models : Rectangle {
+                                height: 53px; border-radius: 9px; background: Colors.soft;
+                                VerticalLayout {
+                                    padding: 9px; spacing: 4px;
+                                    Body { text: item.label; }
+                                    Hint { text: item.value; font-size: 11px; }
+                                }
+                            }
+                            if root.active-models.length == 0 : Hint { text: "暂无模型，点击下方按钮选择角色。"; }
+                            ActionButton { text: "+  选择 Live2D 模型"; clicked => { root.picking-model = true; } }
+                            ActionButton { text: "打开模型目录"; clicked => { root.open-folder(); } }
                         }
                     }
                 }
             }
+
+            if root.page == 1 : VerticalLayout {
+                spacing: 18px;
+                Body { text: "显示设置"; font-size: 28px; font-weight: 700; height: 40px; }
+                Hint { text: "调整桌宠的画面、大小与渲染表现。"; }
+                ScrollView {
+                    content-width: self.visible-width;
+                    VerticalLayout {
+                        spacing: 16px;
+                        Panel {
+                            height: display-layout.min-height;
+                            display-layout := VerticalLayout {
+                                padding: 22px; spacing: 18px;
+                                Heading { text: "画面与性能"; }
+                                HorizontalLayout {
+                                    spacing: 20px;
+                                    Body { text: "画质档位"; width: 110px; }
+                                    ComboBox { model: root.quality-labels; current-index: root.quality; width: 160px; selected(value) => { root.patch-string("live2d_quality", value == "均衡" ? "balanced" : "performance"); } }
+                                    Hint { text: "省电：0.75× 分辨率    均衡：原生分辨率"; horizontal-stretch: 1; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 20px;
+                                    Body { text: "刷新率"; width: 110px; }
+                                    Slider { minimum: 30; maximum: 240; step: 10; value: root.fps; changed(value) => { root.fps = round(value); root.patch-number("fps", round(value)); } }
+                                    Body { text: root.fps + " FPS"; width: 75px; horizontal-alignment: right; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 20px;
+                                    Body { text: "模型缩放"; width: 110px; }
+                                    Slider { minimum: 25; maximum: 500; step: 5; value: root.scale; changed(value) => { root.scale = round(value); root.patch-number("live2d_scale", round(value)); } }
+                                    Body { text: root.scale + " %"; width: 75px; horizontal-alignment: right; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 20px;
+                                    Body { text: "不透明度"; width: 110px; }
+                                    Slider { minimum: 20; maximum: 100; step: 5; value: root.window-opacity; changed(value) => { root.window-opacity = value; root.patch-number("opacity", value / 100); } }
+                                    Body { text: round(root.window-opacity) + " %"; width: 75px; horizontal-alignment: right; }
+                                }
+                                ToggleRow { text: "垂直同步"; hint: "重启程序后生效"; checked: root.vsync; toggled(value) => { root.patch-bool("vsync", value); } }
+                                ToggleRow { text: "GPU 加速"; hint: "重启程序后生效"; checked: root.gpu; toggled(value) => { root.patch-bool("gpu_acceleration", value); } }
+                            }
+                        }
+                        Panel {
+                            height: position-layout.min-height;
+                            position-layout := VerticalLayout {
+                                padding: 22px; spacing: 15px;
+                                Heading { text: "桌面位置"; }
+                                ToggleRow { text: "一起拖动所有角色"; checked: root.move-together; toggled(value) => { root.patch-bool("move_all_roles_together", value); } }
+                                ActionButton { text: "重置所有角色位置"; width: 190px; clicked => { root.reset-positions(); } }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if root.page == 2 : VerticalLayout {
+                spacing: 18px;
+                Body { text: "角色行为"; font-size: 28px; font-weight: 700; height: 40px; }
+                Hint { text: "设置角色如何回应你，以及点击各个区域时的反馈。"; }
+                ScrollView {
+                    content-width: self.visible-width;
+                    VerticalLayout {
+                        spacing: 16px;
+                        Panel {
+                            height: behavior-layout.min-height;
+                            behavior-layout := VerticalLayout {
+                                padding: 22px; spacing: 10px;
+                                Heading { text: "交互与陪伴"; }
+                                ToggleRow { text: "拖拽锁定"; hint: "开启后无法拖动桌宠"; checked: root.drag-locked; toggled(value) => { root.patch-bool("drag_locked", value); } }
+                                ToggleRow { text: "看向鼠标"; checked: root.head-tracking; toggled(value) => { root.patch-bool("live2d_head_tracking_enabled", value); } }
+                                ToggleRow { text: "角色对视"; checked: root.mutual-gaze; toggled(value) => { root.patch-bool("live2d_mutual_gaze_enabled", value); } }
+                                ToggleRow { text: "角色待机动作"; checked: root.idle-actions; toggled(value) => { root.patch-bool("live2d_idle_actions_enabled", value); } }
+                                ToggleRow { text: "启用随机动作"; checked: root.random-actions; toggled(value) => { root.patch-bool("live2d_random_actions_enabled", value); } }
+                                ToggleRow { text: "本地情绪位移"; checked: root.emotion; toggled(value) => { root.patch-bool("emotion_behavior_enabled", value); } }
+                            }
+                        }
+                        Panel {
+                            height: click-layout.min-height;
+                            click-layout := VerticalLayout {
+                                padding: 22px; spacing: 14px;
+                                Heading { text: "点击动作反馈"; }
+                                Hint { text: "留在自动匹配时，会按点击位置选择合适反馈。动作和表情可分别设置。"; }
+                                HorizontalLayout {
+                                    spacing: 14px;
+                                    Body { text: "内置预设"; width: 130px; }
+                                    ComboBox { model: root.preset-labels; current-index <=> root.preset-index; }
+                                    ActionButton { text: "套用预设"; width: 110px; enabled: root.has-model; clicked => { root.apply-preset(root.preset-index == 0 ? "auto" : (root.preset-index == 1 ? "genki" : (root.preset-index == 2 ? "tsundere" : (root.preset-index == 3 ? "shy" : (root.preset-index == 4 ? "cool" : (root.preset-index == 5 ? "surprised" : "random")))))); } }
+                                }
+                                HorizontalLayout {
+                                    spacing: 14px;
+                                    Hint { text: "点击区域"; width: 130px; }
+                                    Hint { text: "动作"; horizontal-stretch: 1; }
+                                    Hint { text: "表情"; horizontal-stretch: 1; }
+                                }
+                                for row[index] in root.regions : HorizontalLayout {
+                                    spacing: 14px;
+                                    Body { text: row.title; width: 130px; }
+                                    ComboBox { model: root.motion-options; current-index: row.motion-index; enabled: root.has-model; selected(value) => { root.edit-region(index, "motion", value); } }
+                                    ComboBox { model: root.expression-options; current-index: row.expression-index; enabled: root.has-model; selected(value) => { root.edit-region(index, "expression", value); } }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if root.page == 3 : VerticalLayout {
+                spacing: 18px;
+                Body { text: "关于"; font-size: 28px; font-weight: 700; height: 40px; }
+                Hint { text: "BANDORI-PET-LITE · 轻量的 Bandori 桌面陪伴"; }
+                ScrollView {
+                    content-width: self.visible-width;
+                    VerticalLayout {
+                        spacing: 16px;
+                        Panel {
+                            height: about-layout.min-height;
+                            about-layout := VerticalLayout {
+                                padding: 24px; spacing: 20px;
+                                HorizontalLayout {
+                                    spacing: 14px;
+                                    Image { source: @image-url("../../../assets/icons/bandori.png"); width: 48px; height: 52px; }
+                                    Body { text: "BANDORI-PET-LITE"; font-size: 23px; font-weight: 700; horizontal-stretch: 1; }
+                                }
+                                for line in root.about-lines : HorizontalLayout {
+                                    spacing: 20px;
+                                    Hint { text: line.label; width: 90px; }
+                                    Body { text: line.value; wrap: word-wrap; horizontal-stretch: 1; font-size: 13px; }
+                                }
+                                ActionButton { text: "打开模型目录"; width: 160px; clicked => { root.open-folder(); } }
+                                Hint { text: "Live2D 运行时：Neocari（GPL-3.0-only）。模型与角色素材版权归 Craft Egg / Bushiroad 所有。"; font-size: 12px; }
+                            }
+                        }
+                    }
+                }
+            }
+            Hint { text: root.status; font-size: 11px; height: 16px; }
         }
     }
 }

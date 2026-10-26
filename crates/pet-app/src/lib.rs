@@ -5,6 +5,7 @@
 //! named pipe. See `docs/BANDORI-PET-LITE.md` for the product contract.
 
 pub mod app;
+mod brand;
 pub mod ipc_host;
 pub mod logging;
 pub mod role;

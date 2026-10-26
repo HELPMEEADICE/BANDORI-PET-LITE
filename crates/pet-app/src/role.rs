@@ -183,6 +183,9 @@ impl Role {
 
         let attributes = Window::default_attributes()
             .with_title(format!("{}-{}", entry.character, entry.costume))
+            .with_window_icon(crate::brand::icon_rgba(48).ok().and_then(|image| {
+                winit::window::Icon::from_rgba(image.into_raw(), 48, 48).ok()
+            }))
             .with_transparent(true)
             .with_decorations(false)
             .with_resizable(false)

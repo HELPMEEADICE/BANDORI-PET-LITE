@@ -74,18 +74,7 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
     });
 
     // ── Character / costume lists ────────────────────────────────────────────
-    let characters: Vec<CharacterItem> = catalog
-        .characters()
-        .iter()
-        .map(|character| CharacterItem {
-            key: character.key.clone().into(),
-            display: character.display.clone().into(),
-            band: character.band_display.clone().into(),
-            costume_count: character.costumes.len() as i32,
-            selected: false,
-        })
-        .collect();
-    window.set_characters(ModelRc::new(VecModel::from(characters)));
+    window.set_characters(character_rows(&catalog, ""));
     window.set_about_lines(ModelRc::new(VecModel::from(
         pet_config::about_lines(paths, &Config::default())
             .into_iter()
@@ -103,33 +92,25 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
             let Some(window) = window_weak.upgrade() else {
                 return;
             };
-            let costumes = catalog.costumes_of(character);
-            let labels: Vec<slint::SharedString> = costumes
-                .iter()
-                .map(|costume| format!("{} ({})", costume.display, costume.id).into())
-                .collect();
-            let ids: Vec<slint::SharedString> = costumes
-                .iter()
-                .map(|costume| costume.id.clone().into())
-                .collect();
-            window.set_costume_labels(ModelRc::new(VecModel::from(labels)));
-            window.set_costume_ids(ModelRc::new(VecModel::from(ids)));
-            if let Some(first) = costumes.first() {
-                window.set_selected_costume(first.id.clone().into());
-            }
-            window.set_selected_character_label(
-                catalog
-                    .character(character)
-                    .map(|entry| entry.display.clone())
-                    .unwrap_or_else(|| character.to_owned())
-                    .into(),
-            );
+            populate_costumes(&window, &catalog, character, None);
         })
     };
 
     {
         let show_costumes = Rc::clone(&show_costumes);
         window.on_select_character(move |character| show_costumes(&character));
+    }
+    if let Some(first) = catalog.characters().first() {
+        show_costumes(&first.key);
+    }
+    {
+        let window_weak = window.as_weak();
+        let catalog = Rc::clone(&catalog);
+        window.on_search_characters(move |query| {
+            if let Some(window) = window_weak.upgrade() {
+                window.set_characters(character_rows(&catalog, &query));
+            }
+        });
     }
 
     {
@@ -145,6 +126,7 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
             };
             if send(&request) {
                 window.set_status("正在切换模型…".into());
+                window.set_picking_model(false);
             } else {
                 window.set_status("桌宠进程未连接".into());
             }
@@ -191,6 +173,40 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
     let pump_shared = Arc::clone(&shared);
     let pump_send = Rc::clone(&send);
     let pump_paths = paths.clone();
+    let pump_catalog = Rc::clone(&catalog);
+    // Decode archive thumbnails away from the UI thread. Only the latest
+    // character's result is displayed if the user switches models quickly.
+    let (portrait_tx, portrait_requests) = channel::<(String, String)>();
+    let (portrait_results, portrait_rx) = channel();
+    let portrait_paths = paths.clone();
+    std::thread::Builder::new()
+        .name("bandori-ui-portraits".into())
+        .spawn(move || {
+            let cache = pet_assets::cache::ModelCache::new(
+                portrait_paths.cache().join("portraits"),
+                portrait_paths.models(),
+            );
+            while let Ok((character, archive)) = portrait_requests.recv() {
+                let mut image_path = None;
+                for member in [
+                    "character.png".to_owned(),
+                    format!("{character}/character.png"),
+                    "character.jpg".to_owned(),
+                    format!("{character}/character.jpg"),
+                    "character.webp".to_owned(),
+                    format!("{character}/character.webp"),
+                ] {
+                    if let Ok(path) = cache.extract_member(&format!("{archive}::{member}")) {
+                        image_path = Some(path);
+                        break;
+                    }
+                }
+                if portrait_results.send((character, image_path)).is_err() {
+                    break;
+                }
+            }
+        })?;
+    let mut portrait_character = String::new();
     let timer = Timer::default();
     timer.start(TimerMode::Repeated, Duration::from_millis(100), move || {
         let Some(window) = pump_window.upgrade() else {
@@ -203,8 +219,7 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                     model,
                     first_run,
                 } => {
-                    let mut parsed: Config =
-                        serde_json::from_value(config).unwrap_or_default();
+                    let mut parsed: Config = serde_json::from_value(config).unwrap_or_default();
                     parsed.normalize_models();
                     if let Ok(mut guard) = pump_shared.config.lock() {
                         *guard = Some(parsed.clone());
@@ -215,7 +230,7 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                     pump_shared.connected.store(true, Ordering::Relaxed);
                     window.set_first_run(first_run);
                     window.set_status("已连接桌宠进程".into());
-                    apply_config_to_window(&window, &parsed, &model, &pump_paths);
+                    apply_config_to_window(&window, &parsed, &model, &pump_paths, &pump_catalog);
                 }
                 Message::PatchApplied {
                     ok,
@@ -227,8 +242,7 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                     } else {
                         window.set_status(format!("保存被拒绝：{}", rejected.join(", ")).into());
                     }
-                    let mut parsed: Config =
-                        serde_json::from_value(config).unwrap_or_default();
+                    let mut parsed: Config = serde_json::from_value(config).unwrap_or_default();
                     parsed.normalize_models();
                     if let Ok(mut guard) = pump_shared.config.lock() {
                         *guard = Some(parsed.clone());
@@ -238,7 +252,7 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                         .lock()
                         .map(|guard| guard.clone())
                         .unwrap_or_default();
-                    apply_config_to_window(&window, &parsed, &model, &pump_paths);
+                    apply_config_to_window(&window, &parsed, &model, &pump_paths, &pump_catalog);
                 }
                 Message::ModelData(model) => {
                     if let Ok(mut guard) = pump_shared.model.lock() {
@@ -250,9 +264,14 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                         .ok()
                         .and_then(|guard| guard.clone())
                         .unwrap_or_default();
-                    apply_config_to_window(&window, &config, &model, &pump_paths);
+                    apply_config_to_window(&window, &config, &model, &pump_paths, &pump_catalog);
                 }
-                Message::MenuShow { items, locked, x, y } => {
+                Message::MenuShow {
+                    items,
+                    locked,
+                    x,
+                    y,
+                } => {
                     if let Some(radial) = pump_radial.upgrade() {
                         radial.set_items(ModelRc::new(VecModel::from(items_to_slint(&items))));
                         radial.set_locked(locked);
@@ -297,6 +316,33 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                 Message::Ready | Message::RequestSnapshot => {}
                 other => {
                     let _ = other;
+                }
+            }
+        }
+        let current_character = pump_shared
+            .config
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().map(|config| config.character.clone()))
+            .unwrap_or_default();
+        if current_character != portrait_character {
+            portrait_character = current_character.clone();
+            window.set_has_portrait(false);
+            window.set_portrait(slint::Image::default());
+            if let Some(costume) = pump_catalog.costumes_of(&current_character).first() {
+                if let Some((archive, _)) = costume.path.split_once("::") {
+                    let archive = pump_paths.root().join(archive);
+                    let _ = portrait_tx
+                        .send((current_character, archive.to_string_lossy().into_owned()));
+                }
+            }
+        }
+        while let Ok((character, path)) = portrait_rx.try_recv() {
+            if character == portrait_character {
+                if let Some(image) = path.and_then(|path| slint::Image::load_from_path(&path).ok())
+                {
+                    window.set_portrait(image);
+                    window.set_has_portrait(true);
                 }
             }
         }
@@ -408,7 +454,9 @@ fn wire_patches(window: &SettingsWindow, send: &Sender) {
         let send = Rc::clone(send);
         window.on_patch_bool(move |key, value| {
             let mut patch = SettingsPatch::default();
-            patch.values.insert(key.to_string(), serde_json::json!(value));
+            patch
+                .values
+                .insert(key.to_string(), serde_json::json!(value));
             let _ = send(&Message::SettingsPatch { patch });
         });
     }
@@ -467,7 +515,13 @@ fn wire_patches(window: &SettingsWindow, send: &Sender) {
     }
 }
 
-fn apply_config_to_window(window: &SettingsWindow, config: &Config, model: &ModelData, paths: &Paths) {
+fn apply_config_to_window(
+    window: &SettingsWindow,
+    config: &Config,
+    model: &ModelData,
+    paths: &Paths,
+    catalog: &Catalog,
+) {
     window.set_fps(config.fps as i32);
     window.set_window_opacity(config.opacity * 100.0);
     window.set_scale(if config.live2d_scale == 0 {
@@ -495,14 +549,48 @@ fn apply_config_to_window(window: &SettingsWindow, config: &Config, model: &Mode
     window.set_obs(config.obs_window_capture_compatible);
     window.set_topmost(config.game_topmost);
     window.set_autostart(config.auto_start);
+    window.set_hide_model(config.hide_live2d_model);
+    window.set_move_together(config.move_all_roles_together);
     window.set_poke_motion(config.poke_motion.clone().into());
     window.set_poke_expression(config.poke_expression.clone().into());
 
-    if !model.character.is_empty() {
-        window.set_selected_character(model.character.clone().into());
-    }
-    if !model.costume.is_empty() {
-        window.set_selected_costume(model.costume.clone().into());
+    window.set_has_model(!config.models.is_empty());
+    let character = catalog.character(&config.character);
+    window.set_active_character_label(
+        character
+            .map(|entry| entry.display.as_str())
+            .unwrap_or(if config.character.is_empty() {
+                "尚未选择角色"
+            } else {
+                &config.character
+            })
+            .into(),
+    );
+    window.set_active_band(
+        character
+            .map(|entry| entry.band_display.as_str())
+            .unwrap_or("")
+            .into(),
+    );
+    window.set_active_costume_label(
+        costume_display(catalog, &config.character, &config.costume).into(),
+    );
+    window.set_active_models(ModelRc::new(VecModel::from(
+        config
+            .models
+            .iter()
+            .map(|entry| AboutLine {
+                label: catalog
+                    .character(&entry.character)
+                    .map(|character| character.display.as_str())
+                    .unwrap_or(&entry.character)
+                    .into(),
+                value: costume_display(catalog, &entry.character, &entry.costume).into(),
+            })
+            .collect::<Vec<_>>(),
+    )));
+    if !window.get_picking_model() && !config.character.is_empty() {
+        populate_costumes(window, catalog, &config.character, Some(&config.costume));
     }
     window.set_model_info(
         format!(
@@ -520,6 +608,22 @@ fn apply_config_to_window(window: &SettingsWindow, config: &Config, model: &Mode
     let expression_options = build_options(&model.expressions);
     window.set_motion_options(ModelRc::new(VecModel::from(motion_options.clone())));
     window.set_expression_options(ModelRc::new(VecModel::from(expression_options.clone())));
+    window.set_poke_motion_index(option_index(&config.poke_motion, &motion_options));
+    window.set_poke_expression_index(option_index(&config.poke_expression, &expression_options));
+    window.set_preset_index(
+        [
+            "auto",
+            "genki",
+            "tsundere",
+            "shy",
+            "cool",
+            "surprised",
+            "random",
+        ]
+        .iter()
+        .position(|name| *name == config.click_motion_active_profile)
+        .unwrap_or(0) as i32,
+    );
 
     let actions = config
         .active_entry()
@@ -550,6 +654,65 @@ fn apply_config_to_window(window: &SettingsWindow, config: &Config, model: &Mode
     )));
 }
 
+fn character_rows(catalog: &Catalog, query: &str) -> ModelRc<CharacterItem> {
+    ModelRc::new(VecModel::from(
+        catalog
+            .search(query)
+            .into_iter()
+            .map(|character| CharacterItem {
+                key: character.key.clone().into(),
+                display: character.display.clone().into(),
+                band: character.band_display.clone().into(),
+                costume_count: character.costumes.len() as i32,
+                selected: false,
+            })
+            .collect::<Vec<_>>(),
+    ))
+}
+
+fn populate_costumes(
+    window: &SettingsWindow,
+    catalog: &Catalog,
+    character: &str,
+    preferred: Option<&str>,
+) {
+    let costumes = catalog.costumes_of(character);
+    window.set_selected_character(character.into());
+    window.set_selected_character_label(
+        catalog
+            .character(character)
+            .map(|entry| entry.display.as_str())
+            .unwrap_or(character)
+            .into(),
+    );
+    window.set_costume_labels(ModelRc::new(VecModel::from(
+        costumes
+            .iter()
+            .map(|costume| costume.display.clone().into())
+            .collect::<Vec<slint::SharedString>>(),
+    )));
+    window.set_costume_ids(ModelRc::new(VecModel::from(
+        costumes
+            .iter()
+            .map(|costume| costume.id.clone().into())
+            .collect::<Vec<slint::SharedString>>(),
+    )));
+    window.set_selected_costume(
+        preferred
+            .filter(|id| costumes.iter().any(|entry| entry.id == *id))
+            .or_else(|| costumes.first().map(|entry| entry.id.as_str()))
+            .unwrap_or("")
+            .into(),
+    );
+}
+
+fn costume_display<'a>(catalog: &'a Catalog, character: &str, costume: &'a str) -> &'a str {
+    catalog
+        .find(character, costume)
+        .map(|entry| entry.display.as_str())
+        .unwrap_or(costume)
+}
+
 fn build_options(names: &[String]) -> Vec<slint::SharedString> {
     let mut options: Vec<slint::SharedString> =
         vec!["自动匹配".into(), "随机动作".into(), "不触发".into()];
@@ -577,7 +740,6 @@ fn option_index(value: &str, options: &[slint::SharedString]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     #[test]
     fn option_lists_put_specials_first() {
@@ -615,14 +777,140 @@ mod tests {
     }
 
     #[test]
-    fn unused_hash_map_marker() {
-        let map: HashMap<u8, u8> = HashMap::new();
-        assert!(map.is_empty());
+    fn large_portrait_stays_inside_its_card_at_different_sizes_and_dpi() {
+        use i_slint_backend_testing::{ElementHandle, TestingBackend, TestingBackendOptions};
+        slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions {
+            renderer_name: Some("software".into()),
+            mock_time: true,
+            ..Default::default()
+        })))
+        .unwrap();
+        let window = SettingsWindow::new().unwrap();
+        window.set_theme(1);
+        window.set_has_model(true);
+        window.set_active_character_label("户山香澄".into());
+        window.set_active_costume_label("295期 Star Trajectory".into());
+        window.set_active_band("Poppin'Party".into());
+        let mut pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(1600, 2400);
+        pixels
+            .make_mut_slice()
+            .fill(slint::Rgba8Pixel::new(220, 30, 30, 255));
+        window.set_portrait(slint::Image::from_rgba8(pixels));
+        window.set_has_portrait(true);
+        window.show().unwrap();
+        for (width, height, scale) in [(1080., 620., 1.), (1180., 680., 1.5), (1500., 900., 1.)] {
+            window
+                .window()
+                .dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged {
+                    scale_factor: scale,
+                });
+            // The testing adapter stores physical size at scale 1, so deliver
+            // the logical resize separately when simulating monitor DPI.
+            window.window().set_size(slint::PhysicalSize::new(
+                (width * scale) as u32,
+                (height * scale) as u32,
+            ));
+            window
+                .window()
+                .dispatch_event(slint::platform::WindowEvent::Resized {
+                    size: slint::LogicalSize::new(width, height),
+                });
+            i_slint_backend_testing::testing_backend::mock_elapsed_time(20);
+            let snapshot = window.window().take_snapshot().unwrap();
+            let element = |id: &str| {
+                ElementHandle::find_by_element_id(&window, &format!("SettingsWindow::{id}"))
+                    .next()
+                    .unwrap_or_else(|| panic!("missing {id}"))
+            };
+            let frame = element("portrait-frame");
+            let portrait = element("portrait-image");
+            let action = element("action-card");
+            assert!(frame.size().width > 100. && frame.size().height > 100.);
+            assert_eq!(portrait.size(), frame.size());
+            assert!(
+                action.size().width >= 245.,
+                "action panel must remain visible"
+            );
+            assert!(action.absolute_position().x + action.size().width < width - 260.);
+            // A large opaque image must never paint over the navigation or header.
+            let physical_width = snapshot.width();
+            let mut red_pixels = 0;
+            for (index, pixel) in snapshot.as_slice().iter().enumerate() {
+                if pixel.r == 220 && pixel.g == 30 && pixel.b == 30 {
+                    let x = (index as u32 % physical_width) as f32 / scale;
+                    let y = (index as u32 / physical_width) as f32 / scale;
+                    assert!(
+                        x >= frame.absolute_position().x - 1.
+                            && x <= frame.absolute_position().x + frame.size().width + 1.
+                    );
+                    assert!(
+                        y >= frame.absolute_position().y - 1.
+                            && y <= frame.absolute_position().y + frame.size().height + 1.
+                    );
+                    red_pixels += 1;
+                }
+            }
+            assert!(
+                red_pixels > 1000,
+                "portrait should be visible inside the card"
+            );
+            if let Ok(output) = std::env::var("BANDORI_UI_QA_DIR") {
+                let output = std::path::Path::new(&output);
+                std::fs::create_dir_all(output).unwrap();
+                image::save_buffer(
+                    output.join(format!("layout-{width}-{scale}.png")),
+                    snapshot.as_bytes(),
+                    snapshot.width(),
+                    snapshot.height(),
+                    image::ColorType::Rgba8,
+                )
+                .unwrap();
+            }
+        }
+        let switch = ElementHandle::find_by_accessible_label(&window, "切换角色/服装")
+            .next()
+            .unwrap();
+        switch.invoke_accessible_default_action();
+        assert!(window.get_picking_model());
+
+        // Optional review artifacts use a locally supplied portrait. The
+        // regression assertions above always use the oversized synthetic image.
+        if let Ok(output) = std::env::var("BANDORI_UI_QA_DIR") {
+            window
+                .window()
+                .set_size(slint::LogicalSize::new(1180., 680.));
+            window.set_picking_model(false);
+            window.set_motion_options(ModelRc::new(VecModel::from(build_options(&[]))));
+            window.set_expression_options(ModelRc::new(VecModel::from(build_options(&[]))));
+            window.set_active_models(ModelRc::new(VecModel::from(vec![AboutLine {
+                label: "户山香澄".into(),
+                value: "295期 Star Trajectory".into(),
+            }])));
+            if let Ok(path) = std::env::var("BANDORI_UI_QA_PORTRAIT") {
+                window.set_portrait(
+                    slint::Image::load_from_path(std::path::Path::new(&path)).unwrap(),
+                );
+            }
+            for (label, page, theme) in [
+                ("model-dark", 0, 1),
+                ("model-light", 0, 0),
+                ("behavior", 2, 1),
+                ("display", 1, 1),
+                ("about", 3, 1),
+            ] {
+                window.set_page(page);
+                window.set_theme(theme);
+                i_slint_backend_testing::testing_backend::mock_elapsed_time(20);
+                let snapshot = window.window().take_snapshot().unwrap();
+                image::save_buffer(
+                    std::path::Path::new(&output).join(format!("{label}.png")),
+                    snapshot.as_bytes(),
+                    snapshot.width(),
+                    snapshot.height(),
+                    image::ColorType::Rgba8,
+                )
+                .unwrap();
+            }
+        }
     }
 }
-
-
-
-
-
-

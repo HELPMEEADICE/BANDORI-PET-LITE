@@ -3,7 +3,7 @@
 use std::sync::mpsc::Sender;
 
 use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
-use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
+use tray_icon::{Icon, MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tracing::{debug, warn};
 
 /// Menu actions surfaced to the app.
@@ -79,6 +79,13 @@ impl Tray {
 
     /// Polls the global muda menu event queue and forwards mapped actions.
     pub fn poll(&mut self) {
+        while let Ok(event) = TrayIconEvent::receiver().try_recv() {
+            if event.id() == self._icon.id()
+                && matches!(event, TrayIconEvent::DoubleClick { button: MouseButton::Left, .. })
+            {
+                let _ = self.sender.send(TrayEvent::OpenSettings);
+            }
+        }
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             if let Some((_, action)) = self
                 .ids
@@ -104,35 +111,11 @@ impl Tray {
     }
 }
 
-/// Builds a 32×32 brand-coloured tray icon.
+/// Embeds the same logo as the settings window, including its alpha channel.
 fn build_icon() -> Result<Icon, Box<dyn std::error::Error>> {
     const SIZE: u32 = 32;
-    let mut rgba = vec![0u8; (SIZE * SIZE * 4) as usize];
-    let center = SIZE as f32 / 2.0;
-    let radius = center - 1.0;
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let dx = x as f32 + 0.5 - center;
-            let dy = y as f32 + 0.5 - center;
-            let distance = (dx * dx + dy * dy).sqrt();
-            let index = ((y * SIZE + x) * 4) as usize;
-            if distance <= radius {
-                // Brand pink #e4004f with a soft inner highlight.
-                let shade = 1.0 - (distance / radius) * 0.25;
-                rgba[index] = (0xe4 as f32 * shade) as u8;
-                rgba[index + 1] = (0x00 as f32 * shade) as u8;
-                rgba[index + 2] = (0x4f as f32 * shade) as u8;
-                rgba[index + 3] = 255;
-            } else if distance <= radius + 1.0 {
-                let alpha = ((radius + 1.0 - distance) * 255.0).clamp(0.0, 255.0) as u8;
-                rgba[index] = 0xe4;
-                rgba[index + 1] = 0x00;
-                rgba[index + 2] = 0x4f;
-                rgba[index + 3] = alpha;
-            }
-        }
-    }
-    Icon::from_rgba(rgba, SIZE, SIZE).map_err(|error| {
+    let image = crate::brand::icon_rgba(SIZE)?;
+    Icon::from_rgba(image.into_raw(), SIZE, SIZE).map_err(|error| {
         warn!(%error, "failed to build tray icon");
         Box::new(error) as Box<dyn std::error::Error>
     })

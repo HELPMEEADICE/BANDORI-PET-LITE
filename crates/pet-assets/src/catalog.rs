@@ -224,11 +224,11 @@ fn read_bands(path: &Path) -> Vec<Band> {
             .map(|file| file.bands)
             .unwrap_or_else(|error| {
                 warn!(path = %path.display(), %error, "band.json unparsable");
-                Vec::new()
+                bundled_bands()
             }),
         Err(error) => {
-            warn!(path = %path.display(), %error, "band.json missing");
-            Vec::new()
+            tracing::debug!(path = %path.display(), %error, "using bundled band.json");
+            bundled_bands()
         }
     }
 }
@@ -239,13 +239,25 @@ fn read_outfits(path: &Path) -> BTreeMap<String, OutfitCharacter> {
             .map(|file| file.characters)
             .unwrap_or_else(|error| {
                 warn!(path = %path.display(), %error, "outfit.json unparsable");
-                BTreeMap::new()
+                bundled_outfits()
             }),
         Err(error) => {
-            warn!(path = %path.display(), %error, "outfit.json missing");
-            BTreeMap::new()
+            tracing::debug!(path = %path.display(), %error, "using bundled outfit.json");
+            bundled_outfits()
         }
     }
+}
+
+fn bundled_bands() -> Vec<Band> {
+    serde_json::from_str::<BandFile>(include_str!("../../../assets/band.json"))
+        .expect("bundled band.json must be valid")
+        .bands
+}
+
+fn bundled_outfits() -> BTreeMap<String, OutfitCharacter> {
+    serde_json::from_str::<OutfitFile>(include_str!("../../../assets/outfit.json"))
+        .expect("bundled outfit.json must be valid")
+        .characters
 }
 
 #[cfg(test)]
@@ -321,7 +333,22 @@ mod tests {
         let index = index_with("kasumi", &[("live_default", ModelFormat::Moc)]);
         let catalog = Catalog::build(dir.path(), &index);
         assert_eq!(catalog.len(), 1);
-        assert_eq!(catalog.characters()[0].display, "kasumi");
-        assert_eq!(catalog.costumes_of("kasumi")[0].display, "live_default");
+        assert_eq!(catalog.characters()[0].display, "户山香澄");
+        assert_eq!(catalog.characters()[0].band_display, "Poppin'Party");
+        assert_eq!(catalog.costumes_of("kasumi")[0].display, "队服");
+    }
+
+    #[test]
+    fn invalid_metadata_uses_the_bundled_names_and_unknown_models_keep_their_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("band.json"), "not json").unwrap();
+        fs::write(dir.path().join("outfit.json"), "not json").unwrap();
+        let mut index = index_with("kasumi", &[("casual-2023", ModelFormat::Moc)]);
+        index.archives.extend(index_with("custom", &[("outfit", ModelFormat::Moc3)]).archives);
+        let catalog = Catalog::build(dir.path(), &index);
+        assert_eq!(catalog.character("kasumi").unwrap().display, "户山香澄");
+        assert_eq!(catalog.find("kasumi", "casual-2023").unwrap().display, "常服2023");
+        assert_eq!(catalog.character("custom").unwrap().display, "custom");
+        assert_eq!(catalog.find("custom", "outfit").unwrap().display, "outfit");
     }
 }
