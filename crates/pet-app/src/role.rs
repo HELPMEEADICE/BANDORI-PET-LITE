@@ -18,6 +18,8 @@ use tracing::{error, info, warn};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton};
 use winit::event_loop::ActiveEventLoop;
+#[cfg(windows)]
+use winit::platform::windows::{WindowAttributesExtWindows, WindowExtWindows};
 use winit::window::{Window, WindowLevel};
 
 /// Result alias for role construction.
@@ -87,8 +89,6 @@ pub struct Role {
     dragging: Option<DragState>,
     /// Hit stability compensation state.
     stability: HitStability,
-    /// Last confirmed hit timestamp (ms since start).
-    last_hit_ms: u64,
     /// Whether click-through is currently enabled.
     pub click_through: bool,
     /// Last passthrough poll timestamp.
@@ -101,6 +101,8 @@ pub struct Role {
     last_update: Instant,
     /// Window hidden by the user (tray / radial menu).
     pub hidden: bool,
+    /// Global display setting, independent of hiding a role via the tray/menu.
+    hide_live2d_model: bool,
     /// Whether the first frame has been presented.
     first_frame_done: bool,
     /// Cached model info for the settings UI.
@@ -189,6 +191,8 @@ impl Role {
                 .with_visible(false)
                 .with_inner_size(PhysicalSize::new(width, height))
                 .with_position(PhysicalPosition::new(decision.x, decision.y));
+        #[cfg(windows)]
+        let attributes = attributes.with_skip_taskbar(true);
         let window = Arc::new(
             event_loop
                 .create_window(attributes)
@@ -198,7 +202,8 @@ impl Role {
         #[cfg(windows)]
         {
             if let Some(hwnd) = win32::hwnd_of(&window) {
-                win32::apply_pet_style(hwnd, config.obs_window_capture_compatible);
+                win32::apply_pet_style(hwnd, config.obs_window_capture_compatible)
+                    .map_err(|error| RoleError::Window(error.to_string()))?;
                 win32::set_window_rect(hwnd, decision.x, decision.y, width, height);
             }
         }
@@ -258,13 +263,13 @@ impl Role {
             cursor: None,
             dragging: None,
             stability: HitStability::default(),
-            last_hit_ms: 0,
             click_through: false,
             last_passthrough_poll: Instant::now(),
             last_click: None,
             bubble: None,
             last_update: Instant::now(),
             hidden: false,
+            hide_live2d_model: config.hide_live2d_model,
             first_frame_done: false,
             info,
             last_topmost: Instant::now(),
@@ -273,15 +278,16 @@ impl Role {
         };
         role.set_hit_alpha_threshold(config.live2d_hit_alpha_threshold);
         role.apply_display_settings(config);
+        // Start safe even if the cursor is already in a transparent corner.
+        let click_through = role.should_be_click_through(config, 0);
+        role.set_click_through(click_through);
 
         // Present the first frame *before* showing the window: a hidden winit
         // window receives no WM_PAINT, so waiting for `RedrawRequested` would
         // deadlock the very first frame (spec: first frame before everything else).
         let presented = role.render();
-        role.window.set_visible(true);
         #[cfg(windows)]
         if let Some(hwnd) = win32::hwnd_of(&role.window) {
-            win32::show_no_activate(hwnd);
             win32::reassert_topmost(hwnd);
         }
         if !presented {
@@ -330,8 +336,8 @@ impl Role {
         if self.renderer.vsync() != config.vsync {
             self.renderer.set_vsync(config.vsync);
         }
-        self.window
-            .set_visible(!config.hide_live2d_model && !self.hidden);
+        self.hide_live2d_model = config.hide_live2d_model;
+        self.sync_visibility();
     }
 
     /// Rebuilds the window for a scale change (RebuildWindow apply level).
@@ -454,11 +460,7 @@ impl Role {
             Ok(()) => {
                 if !self.first_frame_done {
                     self.first_frame_done = true;
-                    self.window.set_visible(true);
-                    #[cfg(windows)]
-                    if let Some(hwnd) = win32::hwnd_of(&self.window) {
-                        win32::show_no_activate(hwnd);
-                    }
+                    self.sync_visibility();
                 }
                 true
             }
@@ -503,7 +505,17 @@ impl Role {
     }
 
     /// Passthrough duty cycle: 16 ms while the cursor is near, 125 ms when idle.
-    pub fn poll_passthrough(&mut self, config: &Config, now_ms: u64, near: bool) {
+    pub fn poll_passthrough(&mut self, config: &Config, now_ms: u64) {
+        // A click-through window receives no CursorMoved/Entered events. Use the
+        // global cursor so it can become interactive again without a 125ms lag.
+        let near = global_cursor().zip(self.window_rect()).is_some_and(
+            |((cx, cy), (x, y, width, height))| {
+                cx >= x as f32 - 96.0
+                    && cy >= y as f32 - 96.0
+                    && cx < x as f32 + width as f32 + 96.0
+                    && cy < y as f32 + height as f32 + 96.0
+            },
+        );
         let interval = if near { 16 } else { 125 };
         if self.last_passthrough_poll.elapsed().as_millis() < interval as u128 {
             return;
@@ -528,11 +540,7 @@ impl Role {
         let snapshot = self.snapshot();
         let size = self.window.inner_size();
         let result = snapshot.hit_test(cursor, (size.width, size.height), alpha_threshold);
-        let hit = self.stability.confirm(result.hit, cursor, now_ms);
-        if hit {
-            self.last_hit_ms = now_ms;
-        }
-        hit
+        self.stability.confirm(result.hit, cursor, now_ms)
     }
 
     /// Region for a local cursor position.
@@ -749,8 +757,11 @@ impl Role {
 
     /// Should the window be click-through right now?
     pub fn should_be_click_through(&mut self, config: &Config, now_ms: u64) -> bool {
-        if config.drag_locked && self.dragging.is_some() {
+        if self.dragging.is_some() {
             return false;
+        }
+        if self.hide_live2d_model || self.hidden || config.opacity <= 0.0 {
+            return true;
         }
         let Some(global) = global_cursor() else {
             return false;
@@ -758,15 +769,25 @@ impl Role {
         let Some((x, y, width, height)) = self.window_rect() else {
             return false;
         };
-        let halfway_outside = global.0 < x as f32 - 96.0
-            || global.1 < y as f32 - 96.0
-            || global.0 > (x as f32) + width as f32 + 96.0
-            || global.1 > (y as f32) + height as f32 + 96.0;
-        if halfway_outside {
+        let outside = global.0 < x as f32
+            || global.1 < y as f32
+            || global.0 >= x as f32 + width as f32
+            || global.1 >= y as f32 + height as f32;
+        if outside {
+            self.stability.reset();
             return true;
         }
         let local = (global.0 - x as f32, global.1 - y as f32);
-        let hit = self.hit_test(local, config.live2d_hit_alpha_threshold, now_ms);
+        let snapshot = self.snapshot();
+        let size = self.window.inner_size();
+        let raw_hit = snapshot
+            .hit_test(
+                local,
+                (size.width, size.height),
+                config.live2d_hit_alpha_threshold,
+            )
+            .hit;
+        let hit = self.stability.confirm_with(raw_hit, local, now_ms, 80);
         !hit
     }
 
@@ -775,10 +796,11 @@ impl Role {
         if self.click_through == enabled {
             return;
         }
-        self.click_through = enabled;
-        #[cfg(windows)]
-        if let Some(hwnd) = win32::hwnd_of(&self.window) {
-            win32::set_click_through(hwnd, enabled);
+        // Keep winit's cached IGNORE_CURSOR_EVENT flag in sync with EXSTYLE.
+        // Raw SetWindowLongPtrW changes disappear on its next flag update.
+        match self.window.set_cursor_hittest(!enabled) {
+            Ok(()) => self.click_through = enabled,
+            Err(error) => warn!(%error, "could not change cursor hit testing"),
         }
     }
 
@@ -811,7 +833,15 @@ impl Role {
     /// Hides or shows the role window.
     pub fn set_hidden(&mut self, hidden: bool) {
         self.hidden = hidden;
-        self.window.set_visible(!hidden);
+        self.sync_visibility();
+    }
+
+    fn sync_visibility(&self) {
+        self.window
+            .set_visible(self.first_frame_done && !self.hidden && !self.hide_live2d_model);
+        // Also applies in OBS mode, where APPWINDOW is retained for capture.
+        #[cfg(windows)]
+        self.window.set_skip_taskbar(true);
     }
 
     /// Plays a random motion from the radial menu.
@@ -920,10 +950,12 @@ impl Role {
 
     /// Applies the OBS capture style without recreating the window.
     pub fn apply_obs_capture(&self, enabled: bool) {
-        let _ = enabled; // taskbar presence is controlled by WS_EX_TOOLWINDOW / WS_EX_APPWINDOW
         #[cfg(windows)]
         if let Some(hwnd) = win32::hwnd_of(&self.window) {
-            win32::apply_pet_style(hwnd, enabled);
+            if let Err(error) = win32::apply_pet_style(hwnd, enabled) {
+                warn!(%error, "could not apply pet window styles");
+            }
+            self.window.set_skip_taskbar(true);
         }
     }
 

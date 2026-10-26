@@ -7,13 +7,13 @@
 |---|---|---|---|
 | 1 | 冷启动 ≤1.5s 出画面 | ✅ | release：进程内 `role ready ms=1101`，外部轮询 `IsWindowVisible` 首帧可见 **1540ms**（含 PowerShell `Start-Process` 约 300–400ms 的建进程开销）。debug 版因 300MB 调试符号页入会多 1s 左右。首帧在 `Role::create` 内同步呈现后才 `set_visible(true)`；启动时不再扫描 64 个归档（改为 `ensure_catalog` 惰性扫描），托盘也延后到首帧之后创建。 |
 | 2 | 多屏位置持久化：拖到别处→重启回到原位；拔掉副屏回主屏中央 | ✅（前半实测，后半单测） | 拖动后 `config.json`：`window_placement x=1862 y=699 w=410 h=750 screen=\\.\DISPLAY1 dpr=1.5`；重启日志 `decision=Absolute x=1862 y=699`，`GetWindowRect` 一致。换屏/分辨率变化走 `relative_x/y` 重算、显示器消失回落主屏中心：`pet-window/src/placement.rs` 的 4 个单测（`changed_geometry_uses_relative_position`、`missing_monitor_falls_back_to_primary` 等）。 |
-| 3 | 按在头发上拖动跟手；划过透明区点到桌面 | ✅ | 拖动：`Drag(2122+205,789+500 → +325,+460)` 后窗口 `2122,789 → 2242,749`，位移 (120,−40) 与注入位移一致。穿透：光标在窗口左上透明角 `EXSTYLE=0x40138`（含 `WS_EX_TRANSPARENT`），移到模型上 `0x40118`（不含），移回角落又变 `0x40138`。 |
+| 3 | 按在头发上拖动跟手；划过透明区点到桌面 | ✅ | 原拖拽实测窗口位移 (120,−40) 与注入位移一致。新增 `window_input` 真实窗口回归对 moc/moc3 均验证 `WindowFromPoint` 在透明区命中下层窗口、移到模型上命中桌宠，再回透明区命中下层；拖拽经过透明区保持接收鼠标，松手后恢复穿透。 |
 | 4 | 缩放 25% / 500% 后窗口重建、命中仍准 | ⚠️ 部分 | 尺寸推导与命中都在同一内容包围盒/同一矩阵上做（`fit_matrix` 与 `hit_test` 共用 `self.matrix`），`sizing.rs` 有 25%/500% 尺寸单测；两个极端值的联调未跑（会占满屏幕）。 |
 | 5 | 7 区分别配动作、逐区点击；`不触发` 区无反应 | ✅ | 7 区判定与预设展开有 22 个单测（含阈值 0.38/0.64/0.62、`__none__` 直接返回空命令、`genki`/`tsundere` 展开结果）。联调点击窗口 10% / 50% / 90% 高度：日志分别是 `region="head"` / `"upper_body_left"` / `"lower_body_center"`，动作按 AUTO 桶命中 `surprised01` / `shame01`。 |
 | 6 | 双击 → 动作 + 抖动 + 气泡；连续 20 次不累积 | ✅（气泡与动作实测，20 次压力未单独跑） | 双击后日志 `play motion motion=shame01`；气泡窗口 `bandori-pet-bubble` `vis=True rect=2217,864,352x140`，~1980ms 后 `vis=False`。状态都在 `PokeState`/`FeedbackTimers` 里按时间戳覆盖，不累积队列。 |
 | 7 | 换角色 ≤1s 热重载，位置缩放保持 | ✅ | 双角色启动日志：kasumi `ms=1025`、anon（moc3，复用同一 GPU）`ms=145`；`swap_model` 不重建窗口，位置取自 `window_placement`。 |
 | 8 | 画质切省电 → 渲染分辨率 0.75× | ✅ | `SceneRenderer::render_size()` 在 0.75× 时返回 `(307,562)`（410×750 的 0.75）；`scale_dim` 单测覆盖 0.75/1.0/0.25。 |
-| 9 | 改 vsync / OBS 兼容后仍透明、仍能穿透 | ✅（重建路径单测，联调未逐一跑） | `apply_obs_capture` 换 `WS_EX_TOOLWINDOW ↔ WS_EX_APPWINDOW` 并 `SWP_FRAMECHANGED`；vsync 走 `Surface::reconfigure`。透明由 surface 的 `PreMultiplied` 决定（实测 `alpha=PreMultiplied`），与窗口样式无关。 |
+| 9 | 改 vsync / OBS 兼容后仍透明、仍能穿透 | ✅（OBS 原生窗口回归；vsync 重配未另做联调） | `apply_obs_capture` 更新样式子类回调的 OBS 标志，切换 `WS_EX_TOOLWINDOW ↔ WS_EX_APPWINDOW`，保留 `NOACTIVATE/LAYERED` 并通过 winit 隐藏任务栏按钮。`window_input` 验证切换后穿透仍可开关；vsync 走 `Surface::reconfigure`。 |
 | 10 | 删掉 config.json 启动 → 打开设置角色页 + 横幅，不崩 | ✅ | `LoadOutcome::is_first_run()` → `OPEN_SETTINGS{page:Model}`；UI 的 `first-run` 横幅。集成测试 `model_selection_without_models_reports_first_run`、`load_config` 的 missing/corrupt 单测（坏文件改名 `.corrupt-<ts>.bak`）。 |
 
 ## 其它硬指标
@@ -33,7 +33,7 @@
 
 1. **径向菜单外部点击关闭**：Slint 没有「失焦/点外面」事件，当前靠 pet 在下次右键时重发 `MENU_SHOW` 覆盖旧位置，菜单不会自己消失。规格要求「点击外部关闭」，这是唯一未实现的交互细节。
 2. **Slint 窗口不做逐像素透明**：设置窗、径向菜单、气泡都是不透明窗口（深色面板）。桌宠窗口的透明是 wgpu surface 实现的，不受影响。
-3. **`WM_NCHITTEST → HTTRANSPARENT` 安全网未做**：规格称它只是同进程安全网，实际穿透完全由 `WS_EX_TRANSPARENT` 控制（已实测有效）。用 `SetWindowLongPtr` 改 winit 的 wndproc 风险大于收益。
+3. **`WM_NCHITTEST → HTTRANSPARENT` 安全网未做**：它只支持同线程窗口间转发，跨进程穿透由 `WS_EX_LAYERED | WS_EX_TRANSPARENT` 控制。窗口现在使用 `SetWindowSubclass` 保留必要样式并处理 `WM_MOUSEACTIVATE`，其余消息交回 winit。
 4. **渲染在主线程**：规格建议 main/render/io 三线程；实现是「事件循环里 `WaitUntil(1/fps)` 节流 + 同线程渲染」，命中是 CPU 计算不阻塞 GPU 提交，实测 60fps 稳定。要拆线程时 `FrameSnapshot` 已经是不可变快照，接口不用改。
 5. **像素模式、i18n 完整化、点击动作配置的导入/导出 UI** 未做（规格标明像素模式 v0 不做 UI；i18n 目前是中/英两套硬编码字符串）。
 6. **`live2d_active_profile`（自定义命名的 profile 保存/选择）** 只支持内置 7 套预设展开；自定义 profile 的数据结构（`click_motion_profiles`）已进配置契约，UI 未提供保存入口。
@@ -54,6 +54,22 @@ $env:BANDORI_PET_ROOT = "$PWD\run"; $env:RUST_LOG = "info,pet_app=debug"
 
 
 ## 修复记录
+
+### 2026-10-26 · 透明区阻挡鼠标、任务栏按钮与桌宠夺焦
+
+根因：winit 在可见性、鼠标命中和窗口层级等标志变化时，根据内部缓存重写整个 `GWL_EXSTYLE`，覆盖此前直接写入的 `WS_EX_NOACTIVATE`、`WS_EX_TOOLWINDOW` 和 `WS_EX_LAYERED`。原穿透代码只改原生样式，且缓存布尔值会阻止再次修正。两个二进制默认使用控制台子系统，独立启动还会产生控制台窗口。
+
+修复：
+
+* 用 `Window::set_cursor_hittest` 同步 winit 的穿透标志；用 `SetWindowSubclass` 在 `WM_STYLECHANGING` 中保留必要原生样式，在 `WM_MOUSEACTIVATE` 中返回 `MA_NOACTIVATE`，销毁时移除子类回调。
+* 创建窗口时即设置 `with_skip_taskbar(true)`，显示/恢复及 OBS 切换时保持任务栏隐藏；两个 exe 改为 Windows GUI 子系统。
+* 首帧呈现后才按全局隐藏设置和角色隐藏状态决定是否显示，移除后续无条件显示。近距离轮询依据全局鼠标位置，穿透状态下也能及时恢复模型交互。
+* 移除右键菜单打开后 10 秒内强制所有角色不穿透的逻辑；拖拽期间保持鼠标接收，锁定拖拽时透明区域继续穿透。
+
+验证：
+
+* `cargo test --workspace`：130 passed、0 failed、3 ignored。新增两个原生隐藏窗口测试，模拟完整样式覆盖及 OBS 模式切换，检查穿透可切换且不激活/分层/任务栏样式得到保留。
+* `BANDORI_PET_TEST_ROOT=run` 下运行 `cargo test -p pet-app --test window_input -- --ignored --nocapture`：真实 kasumi（moc）和 anon（moc3）窗口验证 `WindowFromPoint` 在透明点返回下层窗口、在模型点返回桌宠窗口；核对显示/隐藏、层级变化、缩放、OBS 切换后样式及 `GetForegroundWindow`，并验证启动隐藏与拖拽保持。
 
 ### 2026-10-26 · moc3 模型被 Screen 混合洗白（表现为"渲染错位"）
 

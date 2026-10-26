@@ -55,8 +55,6 @@ pub struct PetApp {
     /// Deferred tray creation (icon is built after the first frame).
     tray_sender: Option<std::sync::mpsc::Sender<TrayEvent>>,
     create_tray: bool,
-    /// While the radial menu is open the pet must not become click-through.
-    menu_open_until: Option<Instant>,
     /// Role currently being dragged, and its rect at the previous tick.
     drag_peer: Option<(usize, (i32, i32), (i32, i32))>,
     /// Last applied `auto_start` value, so the registry is written only on change.
@@ -123,7 +121,6 @@ impl PetApp {
                 .ok()
                 .and_then(|value| value.parse::<f64>().ok()),
             headless: std::env::var("BANDORI_PET_HEADLESS").is_ok(),
-            menu_open_until: None,
             drag_peer: None,
             auto_start_applied: auto_start,
         })
@@ -577,11 +574,9 @@ impl PetApp {
             Message::RequestSnapshot => self.send_snapshot(),
             Message::SettingsPatch { patch } => self.handle_patch(patch),
             Message::MenuAct { action } => {
-                self.menu_open_until = None;
                 self.handle_menu_action(&action);
             }
             Message::MenuLocked { locked } => {
-                self.menu_open_until = None;
                 self.config.drag_locked = locked;
                 self.config_dirty = true;
                 for role in &mut self.roles {
@@ -766,16 +761,7 @@ impl PetApp {
             }
             let _ = index;
             role.guard_topmost(self.config.game_topmost);
-            // While the radial menu is open every role stays interactive.
-            let menu_open = self
-                .menu_open_until
-                .is_some_and(|until| Instant::now() < until);
-            if menu_open {
-                role.set_click_through(false);
-            } else {
-                let near = role.cursor_local().is_some();
-                role.poll_passthrough(&self.config, now_ms, near);
-            }
+            role.poll_passthrough(&self.config, now_ms);
         }
         let _ = frame_budget_ms;
 
@@ -807,7 +793,6 @@ impl PetApp {
         self.config.costume = role.costume.clone();
         self.config_dirty = true;
         self.send_snapshot();
-        self.menu_open_until = Some(Instant::now() + Duration::from_secs(10));
         self.ipc.send(&Message::MenuShow {
             x: x + width as i32 / 2,
             y: y + height as i32 / 2,

@@ -3,6 +3,8 @@
 //! Connects to the running `bandori-pet` over the named pipe given by `--pipe`
 //! (or the default pipe), then serves the settings pages and the radial menu.
 
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 use std::error::Error;
 
 use pet_app::logging;

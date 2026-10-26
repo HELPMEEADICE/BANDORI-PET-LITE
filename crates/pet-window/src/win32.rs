@@ -4,14 +4,15 @@ use std::ffi::c_void;
 
 use tracing::debug;
 use windows::core::{s, w, PCWSTR};
-use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE};
+use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, GetWindowLongPtrW, GetWindowRect, SetCursorPos, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, GWL_EXSTYLE,
-    HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
-    SWP_NOZORDER, SW_SHOWNOACTIVATE, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+    ShowWindow, GWL_EXSTYLE, HWND_TOPMOST, MA_NOACTIVATE, STYLESTRUCT, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SW_SHOWNOACTIVATE,
+    WM_MOUSEACTIVATE, WM_NCDESTROY, WM_STYLECHANGING, WS_EX_APPWINDOW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
 };
 
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -24,6 +25,50 @@ const DWMWA_BORDER_COLOR: DWMWINDOWATTRIBUTE = DWMWINDOWATTRIBUTE(34);
 const DWMWCP_DONOTROUND: i32 = 1;
 /// `DWMWA_COLOR_NONE` — removes the 1 px border Windows 11 draws on popups.
 const DWMWA_COLOR_NONE: u32 = 0xFFFF_FFFE;
+
+const PET_SUBCLASS_ID: usize = 1;
+
+fn pet_ex_style(mut style: u32, obs_capture: bool) -> u32 {
+    // DWM supplies visual alpha; LAYERED + TRANSPARENT supplies cross-process
+    // mouse passthrough. Keep LAYERED even while the model accepts input.
+    style |= WS_EX_NOACTIVATE.0 | WS_EX_LAYERED.0;
+    if obs_capture {
+        style &= !WS_EX_TOOLWINDOW.0;
+        style |= WS_EX_APPWINDOW.0;
+    } else {
+        style &= !WS_EX_APPWINDOW.0;
+        style |= WS_EX_TOOLWINDOW.0;
+    }
+    style
+}
+
+unsafe extern "system" fn pet_subclass_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    subclass_id: usize,
+    obs_capture: usize,
+) -> LRESULT {
+    match message {
+        WM_STYLECHANGING if wparam.0 as i32 == GWL_EXSTYLE.0 => {
+            // winit rewrites the entire EXSTYLE on visibility, hit-test and other
+            // flag changes. Amend its proposed style before Windows applies it;
+            // reapplying afterwards leaves a taskbar/focus race.
+            if let Some(styles) = unsafe { (lparam.0 as *mut STYLESTRUCT).as_mut() } {
+                styles.styleNew = pet_ex_style(styles.styleNew, obs_capture != 0);
+            }
+            return LRESULT(0);
+        }
+        WM_MOUSEACTIVATE => return LRESULT(MA_NOACTIVATE as isize),
+        WM_NCDESTROY => {
+            // No heap state or raw Role pointer survives the native window.
+            let _ = unsafe { RemoveWindowSubclass(hwnd, Some(pet_subclass_proc), subclass_id) };
+        }
+        _ => {}
+    }
+    unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+}
 
 /// Extracts the `HWND` of a winit window.
 pub fn hwnd_of(window: &winit::window::Window) -> Option<HWND> {
@@ -60,23 +105,26 @@ fn set_ex_style(hwnd: HWND, style: isize) {
 /// * never activates (`WS_EX_NOACTIVATE`), stays out of the taskbar
 ///   (`WS_EX_TOOLWINDOW`), unless OBS capture compatibility asks for
 ///   `WS_EX_APPWINDOW`;
-/// * `WS_EX_LAYERED` is required for per-pixel alpha with the DWM;
+/// * `WS_EX_LAYERED` makes `WS_EX_TRANSPARENT` pass input to other processes;
 /// * corner preference `DO_NOT_ROUND` and border colour `NONE` remove the 1 px
 ///   white edge and the rounded corners Windows 11 adds to popups.
-pub fn apply_pet_style(hwnd: HWND, obs_capture: bool) {
-    let mut style = ex_style(hwnd);
-    style |= WS_EX_NOACTIVATE.0 as isize;
-    if obs_capture {
-        style &= !(WS_EX_TOOLWINDOW.0 as isize);
-        style |= WS_EX_APPWINDOW.0 as isize;
-    } else {
-        style &= !(WS_EX_APPWINDOW.0 as isize);
-        style |= WS_EX_TOOLWINDOW.0 as isize;
+///
+/// Must be called on the window's event-loop thread before its first show.
+/// Repeated calls update the existing subclass's OBS setting.
+pub fn apply_pet_style(hwnd: HWND, obs_capture: bool) -> windows::core::Result<()> {
+    unsafe {
+        SetWindowSubclass(
+            hwnd,
+            Some(pet_subclass_proc),
+            PET_SUBCLASS_ID,
+            obs_capture as usize,
+        )
     }
-    // Transparency comes from the DXGI swapchain; the layered bit is still needed
-    // so the DWM composites the window per pixel instead of drawing a black box.
-    style |= WS_EX_LAYERED.0 as isize;
-    set_ex_style(hwnd, style);
+    .ok()?;
+    set_ex_style(
+        hwnd,
+        pet_ex_style(ex_style(hwnd) as u32, obs_capture) as isize,
+    );
 
     if is_windows_11() {
         let corner = DWMWCP_DONOTROUND;
@@ -98,20 +146,7 @@ pub fn apply_pet_style(hwnd: HWND, obs_capture: bool) {
             std::mem::size_of::<u32>() as u32,
         );
     }
-}
-
-/// Enables or disables click-through (`WS_EX_TRANSPARENT`).
-pub fn set_click_through(hwnd: HWND, enabled: bool) {
-    let style = ex_style(hwnd);
-    let transparent = WS_EX_TRANSPARENT.0 as isize;
-    let next = if enabled {
-        style | transparent
-    } else {
-        style & !transparent
-    };
-    if next != style {
-        set_ex_style(hwnd, next);
-    }
+    Ok(())
 }
 
 /// `true` when click-through is currently enabled.
@@ -234,4 +269,76 @@ fn _pcwstr_guard(value: PCWSTR) -> PCWSTR {
     value
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, SendMessageW, WS_EX_ACCEPTFILES, WS_POPUP,
+    };
 
+    struct TestWindow(HWND);
+
+    impl TestWindow {
+        fn new() -> Self {
+            Self(unsafe {
+                CreateWindowExW(
+                    WS_EX_APPWINDOW,
+                    w!("STATIC"),
+                    w!("pet-style-regression"),
+                    WS_POPUP,
+                    0,
+                    0,
+                    100,
+                    100,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap()
+            })
+        }
+    }
+
+    impl Drop for TestWindow {
+        fn drop(&mut self) {
+            let _ = unsafe { DestroyWindow(self.0) };
+        }
+    }
+
+    #[test]
+    fn pet_styles_survive_replacement_without_freezing_cursor_hit_testing() {
+        let window = TestWindow::new();
+        apply_pet_style(window.0, false).unwrap();
+        for passthrough in [true, false, true] {
+            // Simulate winit replacing the complete style from its cached flags.
+            let proposed = WS_EX_APPWINDOW.0
+                | WS_EX_ACCEPTFILES.0
+                | if passthrough { WS_EX_TRANSPARENT.0 } else { 0 };
+            unsafe { SetWindowLongPtrW(window.0, GWL_EXSTYLE, proposed as isize) };
+            let actual = ex_style(window.0) as u32;
+            assert_ne!(actual & WS_EX_NOACTIVATE.0, 0);
+            assert_ne!(actual & WS_EX_LAYERED.0, 0);
+            assert_ne!(actual & WS_EX_TOOLWINDOW.0, 0);
+            assert_ne!(actual & WS_EX_ACCEPTFILES.0, 0);
+            assert_eq!(actual & WS_EX_APPWINDOW.0, 0);
+            assert_eq!(click_through(window.0), passthrough);
+        }
+    }
+
+    #[test]
+    fn obs_updates_existing_style_guard_and_mouse_clicks_do_not_activate() {
+        let window = TestWindow::new();
+        for obs in [false, true, false] {
+            apply_pet_style(window.0, obs).unwrap();
+            unsafe { SetWindowLongPtrW(window.0, GWL_EXSTYLE, WS_EX_ACCEPTFILES.0 as isize) };
+            let actual = ex_style(window.0) as u32;
+            assert_ne!(actual & WS_EX_NOACTIVATE.0, 0);
+            assert_ne!(actual & WS_EX_LAYERED.0, 0);
+            assert_eq!(actual & WS_EX_APPWINDOW.0 != 0, obs);
+            assert_eq!(actual & WS_EX_TOOLWINDOW.0 != 0, !obs);
+            let activation = unsafe { SendMessageW(window.0, WM_MOUSEACTIVATE, None, None) };
+            assert_eq!(activation.0, MA_NOACTIVATE as isize);
+        }
+    }
+}

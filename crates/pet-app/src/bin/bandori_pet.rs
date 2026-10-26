@@ -1,5 +1,7 @@
 //! `bandori-pet` — the resident desktop-pet process.
 
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 use std::error::Error;
 
 use pet_app::{logging, single_instance};

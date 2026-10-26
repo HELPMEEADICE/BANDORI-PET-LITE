@@ -17,6 +17,6 @@ pub use sizing::{content_size, fit_matrix, window_size_for_model, Bounds};
 
 #[cfg(windows)]
 pub use win32::{
-    apply_pet_style, cursor_position, hwnd_of, is_windows_11, reassert_topmost, set_click_through,
-    set_window_rect, window_rect,
+    apply_pet_style, cursor_position, hwnd_of, is_windows_11, reassert_topmost, set_window_rect,
+    window_rect,
 };

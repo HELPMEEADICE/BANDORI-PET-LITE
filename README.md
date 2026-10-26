@@ -106,9 +106,12 @@ $env:BANDORI_PET_ROOT = "$PWD\run"; .\run\bandori-pet.exe
 ```powershell
 $env:BANDORI_PET_TEST_ROOT = "$PWD\run"
 cargo test -p pet-app --test multi_role_runtime -- --ignored --nocapture
+cargo test -p pet-app --test window_input -- --ignored --nocapture
 ```
 
 此测试使用独立临时目录，验证 moc / moc3 角色动态添加、错开放置、移除、换装、组合设置更新、缺失模型保留和配置恢复。
+
+`window_input` 回归会短暂移动鼠标，验证 moc / moc3 透明区的 Windows 实际命中目标、模型区恢复交互、拖拽保持、启动隐藏，以及显示/隐藏、缩放和 OBS 切换后穿透与不夺焦仍有效。桌宠使用 winit 的 `set_cursor_hittest` 同步穿透状态，并通过 `SetWindowSubclass` 在 `WM_STYLECHANGING` 中保留分层、不激活和工具窗口样式；任务栏隐藏同时交给 winit 管理，OBS 兼容模式也不显示任务栏按钮。两个 exe 都使用 Windows GUI 子系统，启动时不会额外弹出控制台。
 
 **帧序固定**（抄 Neocari `examples/show_model.rs`）：mask pass → main pass（`LoadOp::Clear(alpha=0)`）→ blit 到 swapchain。moc3 的每帧顺序是 `reset_parameters → reset_part_opacities → 覆盖参数（视线/眨眼/呼吸/口型）→ motion tick/apply → expression tick/apply → apply_parameter_overrides → apply_physics → apply_pose → update_meshes`；moc 全部塞在 `Moc2RuntimeModel::update(dt)` 里。
 
