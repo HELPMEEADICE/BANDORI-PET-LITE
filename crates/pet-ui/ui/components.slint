@@ -139,25 +139,32 @@ export component ToggleRow inherits Rectangle {
         VerticalLayout {
             spacing: 3px;
             alignment: center;
+            horizontal-stretch: 1;
             Body { text: root.text; }
             if root.hint != "" : Hint { text: root.hint; font-size: 12px; }
         }
         Rectangle {
             width: 40px;
-            height: 21px;
-            border-radius: 11px;
-            border-width: 1px;
-            border-color: focus.has-focus ? Colors.accent : (root.checked ? Colors.accent : #999999);
-            background: root.checked ? Colors.accent : transparent;
-            animate background, border-color { duration: Motion.selection; easing: ease-out; }
+            horizontal-stretch: 0;
+            // Let the layout fill the row; center the fixed-size track inside it.
             Rectangle {
-                x: root.checked ? 23px : 4px;
-                y: 4px;
-                width: 13px;
-                height: 13px;
-                border-radius: 7px;
-                background: root.checked ? #ffffff : #cecece;
-                animate x, background { duration: Motion.selection; easing: ease-out; }
+                y: (parent.height - self.height) / 2;
+                width: parent.width;
+                height: 21px;
+                border-radius: 11px;
+                border-width: 1px;
+                border-color: focus.has-focus ? Colors.accent : (root.checked ? Colors.accent : #999999);
+                background: root.checked ? Colors.accent : transparent;
+                animate background, border-color { duration: Motion.selection; easing: ease-out; }
+                Rectangle {
+                    x: root.checked ? 23px : 4px;
+                    y: (parent.height - self.height) / 2;
+                    width: 13px;
+                    height: 13px;
+                    border-radius: 7px;
+                    background: root.checked ? #ffffff : #cecece;
+                    animate x, background { duration: Motion.selection; easing: ease-out; }
+                }
             }
         }
         Body {
