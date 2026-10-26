@@ -4,7 +4,7 @@ export global Colors {
     out property <bool> dark: Palette.background == #1c1c1c;
     out property <color> canvas: dark ? #1f1f1f : #f7f7f9;
     out property <color> sidebar: dark ? #181818 : #ffffff;
-    out property <color> panel: dark ? #242225 : #ffffff;
+    out property <color> panel: dark ? #222022 : #ffffff;
     out property <color> card: dark ? #303030 : #ffffff;
     out property <color> border: dark ? #3c373e : #e4dfe5;
     out property <color> text: dark ? #ffffff : #25232a;
@@ -43,6 +43,7 @@ export component ActionButton inherits Rectangle {
     in property <string> text;
     in property <bool> primary: false;
     in property <bool> enabled: true;
+    in property <color> text-color: primary ? #201018 : Colors.text;
     callback clicked();
     min-height: 34px;
     min-width: 64px;
@@ -60,7 +61,7 @@ export component ActionButton inherits Rectangle {
         width: parent.width;
         height: parent.height;
         text: root.text;
-        color: root.primary ? #201018 : Colors.text;
+        color: root.text-color;
         horizontal-alignment: center;
     }
     focus := FocusScope {

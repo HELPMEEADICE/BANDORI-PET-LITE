@@ -19,8 +19,8 @@ use neocari::assets::DecodedTexture;
 use neocari::core::Matrix44;
 use neocari::moc3::Moc3DrawableMesh;
 use neocari::render::wgpu::{
-    WgpuClippingPlan, WgpuClippingResources, WgpuLive2dRenderer, WgpuMaskRenderTarget,
-    WgpuMeshBuffers, WgpuTexture, WgpuTransform, preferred_surface_format,
+    preferred_surface_format, WgpuClippingPlan, WgpuClippingResources, WgpuLive2dRenderer,
+    WgpuMaskRenderTarget, WgpuMeshBuffers, WgpuTexture, WgpuTransform,
 };
 use tracing::{info, warn};
 use winit::dpi::PhysicalSize;
@@ -76,7 +76,10 @@ pub struct Gpu {
 
 impl Gpu {
     /// Creates a device. `allow_hardware` mirrors `gpu_acceleration`.
-    pub fn new(allow_hardware: bool, compatible_surface: Option<&wgpu::Surface<'static>>) -> Result<Self, RenderError> {
+    pub fn new(
+        allow_hardware: bool,
+        compatible_surface: Option<&wgpu::Surface<'static>>,
+    ) -> Result<Self, RenderError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         Self::new_from(instance, allow_hardware, compatible_surface)
     }
@@ -158,8 +161,8 @@ impl Surface {
         let mut config = surface
             .get_default_config(&gpu.adapter, size.width.max(1), size.height.max(1))
             .ok_or(RenderError::UnsupportedSurface)?;
-        config.format =
-            preferred_surface_format(&capabilities.formats).ok_or(RenderError::UnsupportedSurface)?;
+        config.format = preferred_surface_format(&capabilities.formats)
+            .ok_or(RenderError::UnsupportedSurface)?;
         let alpha_mode = choose_alpha_mode(&capabilities.alpha_modes);
         config.alpha_mode = alpha_mode;
         config.present_mode = choose_present_mode(&capabilities.present_modes, vsync);
@@ -241,7 +244,9 @@ impl Surface {
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
                 Err(RenderError::Acquire("timed out".to_owned()))
             }
-            wgpu::CurrentSurfaceTexture::Outdated => Err(RenderError::Acquire("outdated".to_owned())),
+            wgpu::CurrentSurfaceTexture::Outdated => {
+                Err(RenderError::Acquire("outdated".to_owned()))
+            }
             wgpu::CurrentSurfaceTexture::Lost => Err(RenderError::Acquire("lost".to_owned())),
             wgpu::CurrentSurfaceTexture::Validation => {
                 Err(RenderError::Acquire("validation".to_owned()))
@@ -341,8 +346,8 @@ impl ModelGpu {
                 Ok(())
             }
             Err(_) => {
-                self.mesh_buffers =
-                    WgpuMeshBuffers::from_drawables(&gpu.device, meshes).ok_or(RenderError::MeshUpload)?;
+                self.mesh_buffers = WgpuMeshBuffers::from_drawables(&gpu.device, meshes)
+                    .ok_or(RenderError::MeshUpload)?;
                 self.drawable_count = self.mesh_buffers.drawables().len();
                 self.rebuild_clipping(gpu, renderer)
             }
@@ -395,6 +400,134 @@ fn build_clipping(
     renderer
         .create_clipping_resources(&gpu.device, &plan)
         .map_err(|error| RenderError::Clipping(format!("{error:?}")))
+}
+
+/// Renders a single transparent preview without creating a native window.
+/// The returned RGBA pixels use straight alpha, suitable for PNG and Slint.
+pub fn render_preview(
+    meshes: &[Moc3DrawableMesh],
+    textures: &[DecodedTexture],
+    matrix: Matrix44,
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>, RenderError> {
+    let gpu = Gpu::new(true, None)?;
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let renderer = WgpuLive2dRenderer::new(&gpu.device, format);
+    let model = ModelGpu::new(&gpu, &renderer, meshes, textures, matrix)?;
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("bandori-picker.preview"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&Default::default());
+    let stride = (width * 4).div_ceil(256) * 256;
+    let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("bandori-picker.readback"),
+        size: stride as u64 * height as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    for mask in [true, false] {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("bandori-picker.preview-pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: if mask {
+                    model.mask_target.view()
+                } else {
+                    &view
+                },
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        if mask {
+            renderer.draw_masks_with_textures(
+                &mut pass,
+                &model.mesh_buffers,
+                &model.clipping,
+                &model.textures,
+            )
+        } else {
+            renderer.draw_with_textures_clipping_and_transform(
+                &mut pass,
+                &model.mesh_buffers,
+                &model.textures,
+                &model.clipping,
+                &model.mask_target,
+                &model.transform,
+            )
+        }
+        .map_err(|error| RenderError::Draw(error.to_string()))?;
+    }
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(stride),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    gpu.queue.submit([encoder.finish()]);
+    let (tx, rx) = std::sync::mpsc::channel();
+    buffer
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+    gpu.device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .map_err(|error| RenderError::Draw(error.to_string()))?;
+    rx.recv()
+        .map_err(|error| RenderError::Draw(error.to_string()))?
+        .map_err(|error| RenderError::Draw(error.to_string()))?;
+    let mapped = buffer
+        .slice(..)
+        .get_mapped_range()
+        .map_err(|error| RenderError::Draw(error.to_string()))?;
+    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+    for row in mapped.chunks(stride as usize) {
+        for pixel in row[..width as usize * 4].chunks_exact(4) {
+            let alpha = pixel[3] as u32;
+            for channel in &pixel[..3] {
+                pixels.push(if alpha == 0 {
+                    0
+                } else {
+                    ((*channel as u32 * 255 + alpha / 2) / alpha).min(255) as u8
+                });
+            }
+            pixels.push(pixel[3]);
+        }
+    }
+    drop(mapped);
+    buffer.unmap();
+    Ok(pixels)
 }
 
 /// Blit pipeline used for the downscale and opacity pass.
@@ -589,7 +722,11 @@ impl SceneRenderer {
         let probe_surface = instance
             .create_surface(Arc::clone(&window))
             .map_err(|error| RenderError::Adapter(error.to_string()))?;
-        let gpu = Arc::new(Gpu::new_from(instance, allow_hardware, Some(&probe_surface))?);
+        let gpu = Arc::new(Gpu::new_from(
+            instance,
+            allow_hardware,
+            Some(&probe_surface),
+        )?);
         let surface = Surface::from_existing(&gpu, probe_surface, window, vsync)?;
         let format = surface.format();
         let renderer = WgpuLive2dRenderer::new(&gpu.device, format);
@@ -853,7 +990,9 @@ impl SceneRenderer {
 
         // Pass 2: blit to the swapchain (scale + opacity).
         {
-            let bind_group = self.blit.bind_group(&self.gpu.device, &self.intermediate.view);
+            let bind_group = self
+                .blit
+                .bind_group(&self.gpu.device, &self.intermediate.view);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("bandori-pet.blit_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -930,8 +1069,3 @@ mod tests {
         assert_eq!(scale_dim(2, 0.25), 1);
     }
 }
-
-
-
-
-

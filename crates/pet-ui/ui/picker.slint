@@ -1,0 +1,201 @@
+import { ComboBox, LineEdit, ListView } from "std-widgets.slint";
+import { Colors, Body, Hint, ActionButton } from "components.slint";
+
+export struct PickerCard { key: string, display: string, count: int, picture: image, has-picture: bool, favorite: bool }
+export struct PickerRow { cards: [PickerCard] }
+export struct CostumeItem { id: string, display: string, favorite: bool }
+
+export component IconButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> checked;
+    callback clicked();
+    width: 28px; height: 28px;
+    border-radius: 14px;
+    background: checked ? Colors.soft : (touch.has-hover ? Colors.hover : Colors.card);
+    border-width: 1px;
+    border-color: checked || focus.has-focus ? Colors.accent : (Colors.dark ? #4a4a4a : #d9dde7);
+    accessible-role: button;
+    accessible-label: label;
+    accessible-action-default => { root.clicked(); }
+    Image { x: 5px; y: 5px; width: 18px; height: 18px; source: root.icon; colorize: root.checked ? Colors.accent : Colors.muted; image-fit: contain; }
+    focus := FocusScope {
+        key-pressed(event) => {
+            if event.text == " " || event.text == "\n" { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { focus.focus(); root.clicked(); } }
+}
+
+export component ModelPicker inherits Rectangle {
+    in property <int> stage;
+    in property <[PickerRow]> rows;
+    in property <[CostumeItem]> costumes;
+    in property <string> band-label;
+    in property <string> character-label;
+    in property <string> selected-costume;
+    in property <string> preview-costume;
+    in-out property <string> search;
+    in-out property <string> costume-search;
+    in-out property <int> character-filter;
+    in-out property <int> costume-filter;
+    in property <bool> showing-characters;
+    callback back();
+    callback choose-card(string);
+    callback choose-costume(string);
+    callback favorite-character(string);
+    callback favorite-costume(string);
+    callback preview(string);
+    callback hover-preview(string, bool);
+    callback refresh();
+    callback import-model();
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 12px;
+        picker-heading := Rectangle {
+            height: 38px; background: transparent;
+            picker-title := Body {
+                x: root.stage == 2 ? 90px : 0px;
+                y: 0px;
+                width: parent.width - self.x;
+                height: parent.height;
+                text: root.stage == 2 ? root.character-label + " - 服装列表" : (root.showing-characters ? "选择角色" : "选择乐队");
+                horizontal-alignment: center; font-size: 28px; font-weight: 700;
+            }
+            if root.stage != 0 : ActionButton {
+                x: 0px; y: 3px;
+                width: root.stage == 2 ? 78px : 106px; height: 32px;
+                text: root.stage == 2 ? "←  返回" : "←  返回乐队";
+                clicked => { root.back(); }
+            }
+        }
+        Body {
+            height: 28px; font-size: 20px; font-weight: 700;
+            horizontal-alignment: root.stage == 2 ? left : center;
+            text: root.stage == 2 ? "请为 " + root.character-label + " 选择一套服装" : (root.showing-characters ? (root.band-label == "" ? "请选择角色" : "请选择 " + root.band-label + " 中的角色") : "请先选择乐队，再选择角色");
+        }
+        if root.stage == 2 : Body {
+            height: 20px;
+            text: "点击服装右侧的预览按钮可以固定/关闭预览；按住 Shift 悬停可临时预览。";
+            font-size: 14px;
+        }
+        HorizontalLayout {
+            height: 36px; spacing: 8px;
+            if root.stage != 2 : LineEdit {
+                text <=> root.search; placeholder-text: "搜索角色 / 乐队 / key";
+                horizontal-stretch: 1; edited => { root.refresh(); }
+            }
+            if root.stage == 2 : LineEdit {
+                text <=> root.costume-search; placeholder-text: "搜索服装 / id";
+                horizontal-stretch: 1; edited => { root.refresh(); }
+            }
+            ComboBox {
+                width: 140px; model: ["全部", "最近使用", "收藏"];
+                current-index: root.stage == 2 ? root.costume-filter : root.character-filter;
+                selected(value) => {
+                    if root.stage == 2 { root.costume-filter = self.current-index; }
+                    else { root.character-filter = self.current-index; }
+                    root.refresh();
+                }
+            }
+            if root.stage != 2 : ActionButton {
+                width: 148px; text: "＋  导入自定义模型";
+                clicked => { root.import-model(); }
+            }
+        }
+        if root.stage != 2 : card-list := ListView {
+            content-width: max(self.visible-width, root.showing-characters ? 684px : 608px);
+            for row in root.rows : Rectangle {
+                height: root.showing-characters ? 374px : 132px;
+                background: transparent;
+                for card[col] in row.cards : Rectangle {
+                    x: root.showing-characters ? col * 234px : 22px + col * (parent.width - 224px) / 2;
+                    y: 6px;
+                    width: root.showing-characters ? 220px : 180px;
+                    height: root.showing-characters ? 360px : 120px;
+                    border-radius: 5px;
+                    background: card-touch.has-hover ? Colors.hover : (Colors.dark ? #272727 : #ffffff);
+                    clip: true;
+                    accessible-role: button;
+                    accessible-label: card.display;
+                    accessible-action-default => { root.choose-card(card.key); }
+                    if !root.showing-characters : VerticalLayout {
+                        padding: 15px; padding-top: 12px; spacing: 4px;
+                        Body { text: card.display; font-weight: 600; height: 22px; }
+                        Hint { text: card.count + "名角色"; color: Colors.dark ? #999999 : #888888; height: 20px; }
+                        Image { source: card.picture; height: 36px; image-fit: contain; }
+                        Rectangle { vertical-stretch: 1; background: transparent; }
+                    }
+                    if root.showing-characters : VerticalLayout {
+                        padding: 16px; padding-top: 20px; padding-bottom: 12px; spacing: 8px;
+                        Rectangle {
+                            height: 264px; background: transparent; clip: true;
+                            Image { width: parent.width; height: parent.height; source: card.picture; image-fit: contain; }
+                            if !card.has-picture : Hint { width: parent.width; height: parent.height; text: "暂无立绘"; horizontal-alignment: center; }
+                        }
+                        Body { text: card.display; font-weight: 700; height: 24px; }
+                        Hint { text: card.count + "套服装"; color: Colors.dark ? #999999 : #888888; height: 22px; }
+                    }
+                    card-focus := FocusScope {
+                        key-pressed(event) => {
+                            if event.text == " " || event.text == "\n" { root.choose-card(card.key); return accept; }
+                            return reject;
+                        }
+                    }
+                    card-touch := TouchArea { mouse-cursor: pointer; clicked => { card-focus.focus(); root.choose-card(card.key); } }
+                    Rectangle { x: parent.width - 25px; y: 12px; width: 13px; height: 13px; border-radius: 7px; background: #25c76c; border-width: 2px; border-color: #cce9d7; }
+                    if root.showing-characters : IconButton {
+                        x: parent.width - 36px; y: 34px;
+                        icon: @image-url("icons/heart.svg"); checked: card.favorite;
+                        label: "收藏角色 " + card.display;
+                        clicked => { root.favorite-character(card.key); }
+                    }
+                }
+            }
+        }
+        if root.stage != 2 && root.rows.length == 0 : Hint { text: "未找到角色，请检查模型目录或搜索条件。"; horizontal-alignment: center; }
+        if root.stage == 2 : costume-list := ListView {
+            content-width: self.visible-width;
+            for costume in root.costumes : Rectangle {
+                height: 46px; background: transparent;
+                Rectangle {
+                    height: 40px; width: parent.width;
+                    border-radius: 6px; border-width: 1px;
+                    border-color: root.selected-costume == costume.id ? Colors.accent : (Colors.dark ? #555555 : #d9dde7);
+                    background: root.selected-costume == costume.id ? Colors.soft : (costume-touch.has-hover ? Colors.hover : (Colors.dark ? #2c2c2c : #ffffff));
+                    Body { x: 16px; width: parent.width - 100px; height: parent.height; text: costume.display; }
+                    accessible-role: button;
+                    accessible-label: "选择服装 " + costume.display;
+                    accessible-action-default => { root.choose-costume(costume.id); }
+                    costume-focus := FocusScope {
+                        key-pressed(event) => {
+                            if event.text == " " || event.text == "\n" { root.choose-costume(costume.id); return accept; }
+                            return reject;
+                        }
+                    }
+                    costume-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { costume-focus.focus(); root.choose-costume(costume.id); }
+                        moved => { root.hover-preview(costume.id, self.has-hover && self.pressed == false); }
+                        changed has-hover => { if !self.has-hover { root.hover-preview(costume.id, false); } }
+                    }
+                    IconButton {
+                        x: parent.width - 74px; y: 6px;
+                        icon: @image-url("icons/eye.svg"); label: "预览服装 " + costume.display;
+                        checked: root.preview-costume == costume.id;
+                        clicked => { root.preview(costume.id); }
+                    }
+                    IconButton {
+                        x: parent.width - 38px; y: 6px;
+                        icon: @image-url("icons/heart.svg"); label: "收藏服装 " + costume.display;
+                        checked: costume.favorite;
+                        clicked => { root.favorite-costume(costume.id); }
+                    }
+                }
+            }
+        }
+        if root.stage == 2 && root.costumes.length == 0 : Hint { text: "没有符合条件的服装"; horizontal-alignment: center; }
+    }
+}

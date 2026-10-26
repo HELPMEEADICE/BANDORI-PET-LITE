@@ -10,6 +10,10 @@ description = "Slint settings pages and radial menu."
 pet-config.workspace = true
 pet-ipc.workspace = true
 pet-assets.workspace = true
+pet-live2d.workspace = true
+pet-render.workspace = true
+pet-window.workspace = true
+image.workspace = true
 slint.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -21,5 +25,4 @@ slint-build.workspace = true
 
 [dev-dependencies]
 i-slint-backend-testing = { version = "=1.18.1", features = ["renderer-software"] }
-image.workspace = true
 

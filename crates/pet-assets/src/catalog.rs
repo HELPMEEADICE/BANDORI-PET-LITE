@@ -25,7 +25,7 @@ pub struct CatalogCharacter {
     pub band_id: String,
     /// Band display name (`Poppin'Party`).
     pub band_display: String,
-    /// Costumes, sorted by display name.
+    /// Costumes, sorted by id to match the reference picker.
     pub costumes: Vec<CatalogCostume>,
 }
 
@@ -58,6 +58,16 @@ impl CatalogCostume {
 pub struct Catalog {
     characters: Vec<CatalogCharacter>,
     by_key: BTreeMap<String, usize>,
+    bands: Vec<CatalogBand>,
+}
+
+/// A band with installed characters, in the order declared by `band.json`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogBand {
+    pub id: String,
+    pub display: String,
+    pub logo: String,
+    pub characters: Vec<String>,
 }
 
 impl Catalog {
@@ -68,19 +78,20 @@ impl Catalog {
 
         let mut characters: BTreeMap<String, CatalogCharacter> = BTreeMap::new();
         for (_, scan, costume) in index.costumes() {
-            let character = characters
-                .entry(scan.character.clone())
-                .or_insert_with(|| CatalogCharacter {
-                    key: scan.character.clone(),
-                    display: outfits
-                        .get(&scan.character)
-                        .map(|outfit| outfit.display.clone())
-                        .filter(|display| !display.is_empty())
-                        .unwrap_or_else(|| scan.character.clone()),
-                    band_id: String::new(),
-                    band_display: String::new(),
-                    costumes: Vec::new(),
-                });
+            let character =
+                characters
+                    .entry(scan.character.clone())
+                    .or_insert_with(|| CatalogCharacter {
+                        key: scan.character.clone(),
+                        display: outfits
+                            .get(&scan.character)
+                            .map(|outfit| outfit.display.clone())
+                            .filter(|display| !display.is_empty())
+                            .unwrap_or_else(|| scan.character.clone()),
+                        band_id: String::new(),
+                        band_display: String::new(),
+                        costumes: Vec::new(),
+                    });
             let display = outfits
                 .get(&scan.character)
                 .and_then(|outfit| outfit.costumes.get(&costume.id).cloned())
@@ -109,23 +120,71 @@ impl Catalog {
             .enumerate()
             .map(|(position, band)| (band.id.as_str(), position))
             .collect();
+        let member_order: BTreeMap<&str, usize> = bands
+            .iter()
+            .flat_map(|band| {
+                band.characters
+                    .iter()
+                    .enumerate()
+                    .map(|(i, key)| (key.as_str(), i))
+            })
+            .collect();
         let mut characters: Vec<CatalogCharacter> = characters.into_values().collect();
         characters.sort_by(|left, right| {
-            let left_rank = order.get(left.band_id.as_str()).copied().unwrap_or(usize::MAX);
-            let right_rank = order.get(right.band_id.as_str()).copied().unwrap_or(usize::MAX);
+            let left_rank = order
+                .get(left.band_id.as_str())
+                .copied()
+                .unwrap_or(usize::MAX);
+            let right_rank = order
+                .get(right.band_id.as_str())
+                .copied()
+                .unwrap_or(usize::MAX);
             left_rank
                 .cmp(&right_rank)
+                .then_with(|| {
+                    member_order
+                        .get(left.key.as_str())
+                        .cmp(&member_order.get(right.key.as_str()))
+                })
                 .then_with(|| left.display.cmp(&right.display))
                 .then_with(|| left.key.cmp(&right.key))
         });
         for character in &mut characters {
-            character.costumes.sort_by(|left, right| {
-                left.display
-                    .cmp(&right.display)
-                    .then_with(|| left.id.cmp(&right.id))
-            });
+            character
+                .costumes
+                .sort_by(|left, right| left.id.cmp(&right.id));
         }
 
+        let mut catalog_bands: Vec<_> = bands
+            .iter()
+            .filter_map(|band| {
+                let members: Vec<_> = band
+                    .characters
+                    .iter()
+                    .filter(|key| characters.iter().any(|character| &character.key == *key))
+                    .cloned()
+                    .collect();
+                (!members.is_empty()).then(|| CatalogBand {
+                    id: band.id.clone(),
+                    display: band.display.clone(),
+                    logo: band.logo.clone(),
+                    characters: members,
+                })
+            })
+            .collect();
+        let unaffiliated: Vec<_> = characters
+            .iter()
+            .filter(|character| character.band_id.is_empty())
+            .map(|character| character.key.clone())
+            .collect();
+        if !unaffiliated.is_empty() {
+            catalog_bands.push(CatalogBand {
+                id: "__custom__".into(),
+                display: "自定义角色".into(),
+                logo: String::new(),
+                characters: unaffiliated,
+            });
+        }
         let by_key = characters
             .iter()
             .enumerate()
@@ -134,6 +193,7 @@ impl Catalog {
         Self {
             characters,
             by_key,
+            bands: catalog_bands,
         }
     }
 
@@ -142,9 +202,15 @@ impl Catalog {
         &self.characters
     }
 
+    pub fn bands(&self) -> &[CatalogBand] {
+        &self.bands
+    }
+
     /// Looks up one character.
     pub fn character(&self, key: &str) -> Option<&CatalogCharacter> {
-        self.by_key.get(key).map(|position| &self.characters[*position])
+        self.by_key
+            .get(key)
+            .map(|position| &self.characters[*position])
     }
 
     /// Costumes of one character.
@@ -200,6 +266,8 @@ struct Band {
     id: String,
     #[serde(default)]
     display: String,
+    #[serde(default)]
+    logo: String,
     #[serde(default)]
     characters: Vec<String>,
 }
@@ -309,7 +377,13 @@ mod tests {
         )
         .unwrap();
 
-        let mut index = index_with("kasumi", &[("live_default", ModelFormat::Moc), ("casual", ModelFormat::Moc)]);
+        let mut index = index_with(
+            "kasumi",
+            &[
+                ("live_default", ModelFormat::Moc),
+                ("casual", ModelFormat::Moc),
+            ],
+        );
         let anon = index_with("anon", &[("casual_spring_01", ModelFormat::Moc3)]);
         index.archives.extend(anon.archives);
 
@@ -323,7 +397,10 @@ mod tests {
         let costumes = catalog.costumes_of("kasumi");
         assert_eq!(costumes.len(), 2);
         assert!(costumes.iter().any(|costume| costume.display == "初始"));
-        assert_eq!(catalog.find("anon", "casual_spring_01").unwrap().format, ModelFormat::Moc3);
+        assert_eq!(
+            catalog.find("anon", "casual_spring_01").unwrap().format,
+            ModelFormat::Moc3
+        );
         assert_eq!(catalog.search("香澄").len(), 1);
     }
 
@@ -344,10 +421,15 @@ mod tests {
         fs::write(dir.path().join("band.json"), "not json").unwrap();
         fs::write(dir.path().join("outfit.json"), "not json").unwrap();
         let mut index = index_with("kasumi", &[("casual-2023", ModelFormat::Moc)]);
-        index.archives.extend(index_with("custom", &[("outfit", ModelFormat::Moc3)]).archives);
+        index
+            .archives
+            .extend(index_with("custom", &[("outfit", ModelFormat::Moc3)]).archives);
         let catalog = Catalog::build(dir.path(), &index);
         assert_eq!(catalog.character("kasumi").unwrap().display, "户山香澄");
-        assert_eq!(catalog.find("kasumi", "casual-2023").unwrap().display, "常服2023");
+        assert_eq!(
+            catalog.find("kasumi", "casual-2023").unwrap().display,
+            "常服2023"
+        );
         assert_eq!(catalog.character("custom").unwrap().display, "custom");
         assert_eq!(catalog.find("custom", "outfit").unwrap().display, "outfit");
     }

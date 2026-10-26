@@ -1,6 +1,10 @@
 //! Slint settings window and radial menu, wired to `bandori-pet` over the pipe.
 
+use std::cell::RefCell;
 use std::rc::Rc;
+
+mod picker;
+mod preview;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
@@ -43,9 +47,9 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
     let _ = bubble.hide();
 
     let index = pet_assets::index::load_or_scan(&paths.models());
-    let catalog = Rc::new(Catalog::build(&paths.assets(), &index));
+    let catalog = Rc::new(RefCell::new(Catalog::build(&paths.assets(), &index)));
     info!(
-        characters = catalog.len(),
+        characters = catalog.borrow().len(),
         costumes = index.costume_count(),
         "settings catalog loaded"
     );
@@ -74,7 +78,9 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
     });
 
     // ── Character / costume lists ────────────────────────────────────────────
-    window.set_characters(character_rows(&catalog, ""));
+    let picker = picker::Picker::new(Rc::clone(&catalog), paths, Rc::clone(&send))?;
+    picker.wire(&window);
+    picker.refresh(&window);
     window.set_about_lines(ModelRc::new(VecModel::from(
         pet_config::about_lines(paths, &Config::default())
             .into_iter()
@@ -85,51 +91,125 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
             .collect::<Vec<_>>(),
     )));
 
-    let show_costumes = {
+    {
+        let send = Rc::clone(&send);
         let window_weak = window.as_weak();
+        let picker = Rc::clone(&picker);
+        let shared = Arc::clone(&shared);
         let catalog = Rc::clone(&catalog);
-        Rc::new(move |character: &str| {
+        window.on_apply_selection(move |character, costume| {
             let Some(window) = window_weak.upgrade() else {
                 return;
             };
-            populate_costumes(&window, &catalog, character, None);
-        })
-    };
-
-    {
-        let show_costumes = Rc::clone(&show_costumes);
-        window.on_select_character(move |character| show_costumes(&character));
-    }
-    if let Some(first) = catalog.characters().first() {
-        show_costumes(&first.key);
-    }
-    {
-        let window_weak = window.as_weak();
-        let catalog = Rc::clone(&catalog);
-        window.on_search_characters(move |query| {
-            if let Some(window) = window_weak.upgrade() {
-                window.set_characters(character_rows(&catalog, &query));
+            let catalog = catalog.borrow();
+            let Some(selected) = catalog.find(&character, &costume) else {
+                return;
+            };
+            let mut config = shared
+                .config
+                .lock()
+                .ok()
+                .and_then(|value| value.clone())
+                .unwrap_or_default();
+            let entry =
+                pet_config::ModelEntry::new(&character, &costume, &selected.path, selected.format);
+            if let Some(existing) = config
+                .models
+                .iter_mut()
+                .find(|entry| entry.character == character.as_str())
+            {
+                existing.costume = entry.costume;
+                existing.path = entry.path;
+                existing.format = entry.format;
+            } else if !window.get_adding_model() && !config.models.is_empty() {
+                let index = config
+                    .models
+                    .iter()
+                    .position(|entry| entry.character == config.character)
+                    .unwrap_or(0);
+                config.models[index] = entry;
+            } else {
+                config.models.push(entry);
+            }
+            config.model_picker_state = picker.remember_selection(&character, &costume);
+            let request = Message::SettingsPatch {
+                patch: SettingsPatch::from_pairs([
+                    ("models", serde_json::json!(config.models)),
+                    ("character", serde_json::json!(character.as_str())),
+                    ("costume", serde_json::json!(costume.as_str())),
+                    (
+                        "model_picker_state",
+                        serde_json::json!(config.model_picker_state),
+                    ),
+                ]),
+            };
+            if send(&request) {
+                picker.close_preview(&window);
+                window.set_status("正在切换模型…".into());
+                window.set_picking_model(false);
+            } else {
+                window.set_status("桌宠进程未连接".into());
             }
         });
     }
 
     {
         let send = Rc::clone(&send);
-        let window_weak = window.as_weak();
-        window.on_apply_selection(move |character, costume| {
-            let Some(window) = window_weak.upgrade() else {
+        let weak = window.as_weak();
+        window.on_apply_options(move || {
+            if let Some(window) = weak.upgrade() {
+                let patch = SettingsPatch::from_pairs([
+                    ("game_topmost", serde_json::json!(window.get_topmost())),
+                    (
+                        "obs_window_capture_compatible",
+                        serde_json::json!(window.get_obs()),
+                    ),
+                    (
+                        "hide_live2d_model",
+                        serde_json::json!(window.get_hide_model()),
+                    ),
+                    ("auto_start", serde_json::json!(window.get_autostart())),
+                    (
+                        "language",
+                        serde_json::json!(if window.get_language_index() == 1 {
+                            "en_US"
+                        } else {
+                            "zh_CN"
+                        }),
+                    ),
+                ]);
+                if send(&Message::SettingsPatch { patch }) {
+                    window.set_options_dirty(false);
+                } else {
+                    window.set_status("桌宠进程未连接".into());
+                }
+            }
+        });
+    }
+    {
+        let send = Rc::clone(&send);
+        let shared = Arc::clone(&shared);
+        window.on_remove_model(move |index| {
+            let Some(mut config) = shared.config.lock().ok().and_then(|value| value.clone()) else {
                 return;
             };
-            let request = Message::ModelSelect {
-                character: character.to_string(),
-                costume: costume.to_string(),
-            };
-            if send(&request) {
-                window.set_status("正在切换模型…".into());
-                window.set_picking_model(false);
-            } else {
-                window.set_status("桌宠进程未连接".into());
+            if index < 0 || index as usize >= config.models.len() {
+                return;
             }
+            config.models.remove(index as usize);
+            let active = config.models.first();
+            let patch = SettingsPatch::from_pairs([
+                ("models", serde_json::json!(config.models)),
+                (
+                    "character",
+                    serde_json::json!(active.map(|entry| entry.character.as_str()).unwrap_or("")),
+                ),
+                (
+                    "costume",
+                    serde_json::json!(active.map(|entry| entry.costume.as_str()).unwrap_or("")),
+                ),
+            ]);
+            send(&Message::SettingsPatch { patch });
         });
     }
 
@@ -174,39 +254,7 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
     let pump_send = Rc::clone(&send);
     let pump_paths = paths.clone();
     let pump_catalog = Rc::clone(&catalog);
-    // Decode archive thumbnails away from the UI thread. Only the latest
-    // character's result is displayed if the user switches models quickly.
-    let (portrait_tx, portrait_requests) = channel::<(String, String)>();
-    let (portrait_results, portrait_rx) = channel();
-    let portrait_paths = paths.clone();
-    std::thread::Builder::new()
-        .name("bandori-ui-portraits".into())
-        .spawn(move || {
-            let cache = pet_assets::cache::ModelCache::new(
-                portrait_paths.cache().join("portraits"),
-                portrait_paths.models(),
-            );
-            while let Ok((character, archive)) = portrait_requests.recv() {
-                let mut image_path = None;
-                for member in [
-                    "character.png".to_owned(),
-                    format!("{character}/character.png"),
-                    "character.jpg".to_owned(),
-                    format!("{character}/character.jpg"),
-                    "character.webp".to_owned(),
-                    format!("{character}/character.webp"),
-                ] {
-                    if let Ok(path) = cache.extract_member(&format!("{archive}::{member}")) {
-                        image_path = Some(path);
-                        break;
-                    }
-                }
-                if portrait_results.send((character, image_path)).is_err() {
-                    break;
-                }
-            }
-        })?;
-    let mut portrait_character = String::new();
+    let pump_picker = Rc::clone(&picker);
     let timer = Timer::default();
     timer.start(TimerMode::Repeated, Duration::from_millis(100), move || {
         let Some(window) = pump_window.upgrade() else {
@@ -230,7 +278,14 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                     pump_shared.connected.store(true, Ordering::Relaxed);
                     window.set_first_run(first_run);
                     window.set_status("已连接桌宠进程".into());
-                    apply_config_to_window(&window, &parsed, &model, &pump_paths, &pump_catalog);
+                    pump_picker.update_config(&window, &parsed);
+                    apply_config_to_window(
+                        &window,
+                        &parsed,
+                        &model,
+                        &pump_paths,
+                        &pump_catalog.borrow(),
+                    );
                 }
                 Message::PatchApplied {
                     ok,
@@ -252,7 +307,14 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                         .lock()
                         .map(|guard| guard.clone())
                         .unwrap_or_default();
-                    apply_config_to_window(&window, &parsed, &model, &pump_paths, &pump_catalog);
+                    pump_picker.update_config(&window, &parsed);
+                    apply_config_to_window(
+                        &window,
+                        &parsed,
+                        &model,
+                        &pump_paths,
+                        &pump_catalog.borrow(),
+                    );
                 }
                 Message::ModelData(model) => {
                     if let Ok(mut guard) = pump_shared.model.lock() {
@@ -264,7 +326,14 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                         .ok()
                         .and_then(|guard| guard.clone())
                         .unwrap_or_default();
-                    apply_config_to_window(&window, &config, &model, &pump_paths, &pump_catalog);
+                    pump_picker.update_config(&window, &config);
+                    apply_config_to_window(
+                        &window,
+                        &config,
+                        &model,
+                        &pump_paths,
+                        &pump_catalog.borrow(),
+                    );
                 }
                 Message::MenuShow {
                     items,
@@ -325,27 +394,7 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
             .ok()
             .and_then(|guard| guard.as_ref().map(|config| config.character.clone()))
             .unwrap_or_default();
-        if current_character != portrait_character {
-            portrait_character = current_character.clone();
-            window.set_has_portrait(false);
-            window.set_portrait(slint::Image::default());
-            if let Some(costume) = pump_catalog.costumes_of(&current_character).first() {
-                if let Some((archive, _)) = costume.path.split_once("::") {
-                    let archive = pump_paths.root().join(archive);
-                    let _ = portrait_tx
-                        .send((current_character, archive.to_string_lossy().into_owned()));
-                }
-            }
-        }
-        while let Ok((character, path)) = portrait_rx.try_recv() {
-            if character == portrait_character {
-                if let Some(image) = path.and_then(|path| slint::Image::load_from_path(&path).ok())
-                {
-                    window.set_portrait(image);
-                    window.set_has_portrait(true);
-                }
-            }
-        }
+        pump_picker.poll(&window, &current_character);
         // The settings window requests a snapshot on open.
         if !pump_shared.connected.load(Ordering::Relaxed) {
             let _ = pump_send(&Message::RequestSnapshot);
@@ -546,15 +595,25 @@ fn apply_config_to_window(
     window.set_idle_actions(config.live2d_idle_actions_enabled);
     window.set_random_actions(config.live2d_random_actions_enabled);
     window.set_emotion(config.emotion_behavior_enabled);
-    window.set_obs(config.obs_window_capture_compatible);
-    window.set_topmost(config.game_topmost);
-    window.set_autostart(config.auto_start);
-    window.set_hide_model(config.hide_live2d_model);
+    if !window.get_options_dirty() {
+        window.set_obs(config.obs_window_capture_compatible);
+        window.set_topmost(config.game_topmost);
+        window.set_autostart(config.auto_start);
+        window.set_language_index(if config.language.starts_with("en") {
+            1
+        } else {
+            0
+        });
+        window.set_hide_model(config.hide_live2d_model);
+    }
     window.set_move_together(config.move_all_roles_together);
     window.set_poke_motion(config.poke_motion.clone().into());
     window.set_poke_expression(config.poke_expression.clone().into());
 
     window.set_has_model(!config.models.is_empty());
+    if config.models.is_empty() {
+        window.set_picking_model(true);
+    }
     let character = catalog.character(&config.character);
     window.set_active_character_label(
         character
@@ -654,22 +713,6 @@ fn apply_config_to_window(
     )));
 }
 
-fn character_rows(catalog: &Catalog, query: &str) -> ModelRc<CharacterItem> {
-    ModelRc::new(VecModel::from(
-        catalog
-            .search(query)
-            .into_iter()
-            .map(|character| CharacterItem {
-                key: character.key.clone().into(),
-                display: character.display.clone().into(),
-                band: character.band_display.clone().into(),
-                costume_count: character.costumes.len() as i32,
-                selected: false,
-            })
-            .collect::<Vec<_>>(),
-    ))
-}
-
 fn populate_costumes(
     window: &SettingsWindow,
     catalog: &Catalog,
@@ -685,18 +728,6 @@ fn populate_costumes(
             .unwrap_or(character)
             .into(),
     );
-    window.set_costume_labels(ModelRc::new(VecModel::from(
-        costumes
-            .iter()
-            .map(|costume| costume.display.clone().into())
-            .collect::<Vec<slint::SharedString>>(),
-    )));
-    window.set_costume_ids(ModelRc::new(VecModel::from(
-        costumes
-            .iter()
-            .map(|costume| costume.id.clone().into())
-            .collect::<Vec<slint::SharedString>>(),
-    )));
     window.set_selected_costume(
         preferred
             .filter(|id| costumes.iter().any(|entry| entry.id == *id))
