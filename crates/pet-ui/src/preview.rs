@@ -42,11 +42,29 @@ mod tests {
         let output = render(&paths, &model).unwrap();
         let image = image::open(&output).unwrap().to_rgba8();
         assert_eq!(image.width(), 384);
-        let visible = image.pixels().filter(|pixel| pixel[3] > 16).count();
+        let mut visible = 0usize;
+        let mut dark_head = 0usize;
+        for (_, y, pixel) in image.enumerate_pixels() {
+            if pixel[3] <= 16 {
+                continue;
+            }
+            visible += 1;
+            let luma = (pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32) / 3;
+            if y < image.height() / 3 && luma < 90 {
+                dark_head += 1;
+            }
+        }
         assert!(visible > 1000, "preview must contain the model");
         assert!(
             visible < (image.width() * image.height()) as usize,
             "preview must retain transparency"
+        );
+        // Regression guard for the MOC3 `Screen` mis-decode (vendor/neocari/
+        // PATCHES.md): every drawable used to composite additively, which washed the
+        // face out and left only 40 dark pixels in the head band.
+        assert!(
+            dark_head > 200,
+            "face lost its line art ({dark_head} dark pixels in the head band)"
         );
         if let Ok(directory) = std::env::var("BANDORI_UI_QA_DIR") {
             std::fs::create_dir_all(&directory).unwrap();

@@ -25,7 +25,7 @@
 | moc / moc3 都能跑 | kasumi(moc): 28 动作 / 18 表情；anon(moc3): 66 动作组 / 36 表情，实际播放 `mtn_smile01_R`（标签 `smile` 正确命中 moc3 命名）。 |
 | 解压缓存 | 首次解压 kasumi/live_default 112ms（tar.zst 流式 + 只落该服装目录），moc3 服装 651ms；缓存命中不再解压。 |
 | 双角色 | 两窗口同屏，第二个角色复用首个 `Arc<Gpu>`（只出现一行 `renderer initialised`），创建 145ms。 |
-| 测试 | `cargo test --workspace` → **114 passed, 0 failed**（含 5 个配置/IPC 集成测试、22 个命中与匹配单测、8 个窗口位置与尺寸单测）。 |
+| 测试 | `cargo test --workspace` → **119 passed, 0 failed, 1 ignored**（含 5 个配置/IPC 集成测试、22 个命中与匹配单测、8 个窗口位置与尺寸单测；ignored 的是需要本地模型 + GPU 的离屏预览测试）。 |
 | 设置窗 | `bandori-ui` 通过命名管道连上 pet（日志 `settings process connected`），窗口 `responsive=True`（`WM_NULL` + `SendMessageTimeout` 2s 内应答），管道往返 `<100ms`。 |
 | 崩溃守护 | 杀掉 `bandori-ui` 后：`settings process disconnected` → `restarting settings process attempt=1` → 新进程 `pid=16368`，从断开到重新连上 **~130ms**（3s 节流 + 最多 3 次，防重启风暴）。pet 退出时先原子写 config 再广播 `QUIT`。 |
 
@@ -54,6 +54,36 @@ $env:BANDORI_PET_ROOT = "$PWD\run"; $env:RUST_LOG = "info,pet_app=debug"
 
 
 ## 修复记录
+
+### 2026-10-26 · moc3 模型被 Screen 混合洗白（表现为"渲染错位"）
+
+现象：所有 `.moc3` 服装渲染成半透明的白化幽灵——脸是一块没有眉眼嘴的白色椭圆，肩、胯、膝盖上各有一块白斑，设置窗的文字能透过模型看到；`.moc`（香澄）不受影响。
+
+根因在 `vendor/neocari` 的 moc3 常量标志位解码：内部 flag 字节把 `1 << 2` 定义为 Cubism 2 的 `Screen` 混合，但 **moc3 art mesh 的 constant flag bit 2 不是混合模式**——Cubism 3/4/5 导出器几乎给每个 art mesh 都置了这一位（非合成常量位）。于是 365 个 drawable 全部走 `One/OneMinusSrc` 的 Screen 混合，在透明目标上逐层叠加，颜色饱和到白、alpha 被摊薄：
+
+| 模型 | drawable | flag 直方图（含 `0x04` 的比例） |
+|---|---|---|
+| anon / school_winter_hs_1st | 365 | `0x04` ×333、`0x06` ×23、`0x0c` ×8、`0x0e` ×1（100%） |
+| anon / casual_spring_01 | 352 | `0x04` ×317、`0x06` ×26、`0x0c` ×7、`0x0e` ×2（100%） |
+
+修复（`vendor/neocari/PATCHES.md` 有完整清单）：
+* 新增 `Moc3DrawableBlendMode::from_moc3_flags()`：只认 bit 0（additive）、bit 1（multiplicative），bit 2 不参与混合；`Moc3DrawableMesh` 显式保存解析出的 `blend_mode`；
+* `build_moc3_drawable_mesh` / `build_moc3_drawable_mesh_for_pose` 都写入 moc3 解码结果，逐帧重建沿用基础网格的混合模式；
+* moc2 合成出来的 `Screen` 仍走 `from_flags` 的 `0x04`，`.moc` 行为零改动；
+* 单测 `moc3::drawable::tests::{moc3_constant_flag_is_not_decoded_as_screen_blend, cubism2_screen_flag_still_maps_to_screen_blend}` 锁定两套解码；
+* `pet-ui` 的 `renders_local_costume_offscreen` 增加回归断言：头部（上 1/3）暗色线稿像素 > 200（修复前只有 40）。
+
+验证（同一套离屏预览，384×768，RTX 5080 / Vulkan）：
+
+| 指标 | 修复前 | 修复后 |
+|---|---|---|
+| 近白像素（RGB ≥252）占比 | 19 076 / 112 331（17.0%） | 28 / 112 331（0.02%） |
+| 头部暗色线稿像素（luma<90） | 40 | 1 679 |
+| kasumi（moc2）预览 | — | 与修复前逐像素一致（384×701，max diff=0） |
+
+预览取 `model.update(1/60)` 的单帧，自动眨眼/呼吸带随机种子，相邻两次渲染的模型像素总数会有 ±0.2% 波动；上表的前后对比取自同一模型、同一尺寸的两次测量。
+
+宠物窗实机确认（`bandori-pet.exe`，264×750 物理像素 @dpr 1.5，Windows 桌面截图）：脸、领带、格子裙、袜鞋全部正常，背景仍逐像素透明，设置窗文字不再透过模型。
 
 ### 2026-10-26 · moc 角色上下颠倒
 
