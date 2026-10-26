@@ -616,17 +616,24 @@ export struct RadialItem {
     action: string,
     label: string,
     glyph: string,
-    angle: float,
+    offset-x: float,
+    offset-y: float,
+    enabled: bool,
 }
 
 export component RadialMenu inherits Window {
     title: "BANDORI-PET-LITE 菜单";
     preferred-width: 360px;
     preferred-height: 360px;
-    background: #1b1b22;
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
 
     in-out property <[RadialItem]> items;
     in-out property <bool> locked: true;
+    in property <float> spread: 0;
+    in property <float> reveal: 0;
+    in property <bool> interactive: false;
 
     callback action(string);
     callback locked-toggled(bool);
@@ -634,19 +641,22 @@ export component RadialMenu inherits Window {
     Rectangle {
         width: parent.width;
         height: parent.height;
-        background: #1b1b22;
-        border-radius: 18px;
+        background: transparent;
 
         // Four items on a 110 px radius circle starting at 12 o'clock.
-        for item[index] in root.items : Rectangle {
+        for item in root.items : Rectangle {
             width: 88px;
             height: 88px;
             border-radius: 44px;
-            x: parent.width / 2 - self.width / 2 + (index == 0 ? 0px : (index == 1 ? 110px : (index == 2 ? 0px : -110px)));
-            y: parent.height / 2 - self.height / 2 + (index == 0 ? -110px : (index == 1 ? 0px : (index == 2 ? 110px : 0px)));
-            background: item-touch.has-hover ? #33333d : #26262f;
+            x: parent.width / 2 - self.width / 2 + item.offset-x * 110px * root.spread;
+            y: parent.height / 2 - self.height / 2 + item.offset-y * 110px * root.spread;
+            opacity: root.reveal * (item.enabled ? 1 : 0.45);
+            background: item-touch.pressed ? #202027 : (item-touch.has-hover ? #3b3b46 : #26262f);
             border-width: 1px;
-            border-color: #3c3c48;
+            border-color: item-touch.has-hover ? #777781 : #494954;
+            accessible-role: button;
+            accessible-label: item.label;
+            accessible-action-default => { if (root.interactive && item.enabled) { root.action(item.action); } }
 
             VerticalLayout {
                 spacing: 2px;
@@ -666,20 +676,26 @@ export component RadialMenu inherits Window {
                 }
             }
             item-touch := TouchArea {
+                enabled: root.interactive && item.enabled;
+                mouse-cursor: pointer;
                 clicked => { root.action(item.action); }
             }
         }
 
         // Center hub: click to toggle the drag lock.
         Rectangle {
-            width: 72px;
-            height: 72px;
-            border-radius: 36px;
+            width: 72px * (0.72 + 0.28 * root.reveal);
+            height: self.width;
+            border-radius: self.width / 2;
             x: parent.width / 2 - self.width / 2;
             y: parent.height / 2 - self.height / 2;
             background: hub-touch.has-hover ? #454550 : #33333c;
             border-width: 2px;
             border-color: #55555f;
+            opacity: root.reveal;
+            accessible-role: button;
+            accessible-label: root.locked ? "解除拖拽锁定" : "锁定拖拽";
+            accessible-action-default => { root.toggle-lock(); }
             Text {
                 text: root.locked ? "🔒" : "🔓";
                 font-size: 20px;
@@ -688,8 +704,17 @@ export component RadialMenu inherits Window {
                 color: #ffffff;
             }
             hub-touch := TouchArea {
-                clicked => { root.locked-toggled(!root.locked); }
+                enabled: root.interactive;
+                mouse-cursor: pointer;
+                clicked => { root.toggle-lock(); }
             }
+        }
+    }
+
+    function toggle-lock() {
+        if (root.interactive) {
+            root.locked = !root.locked;
+            root.locked-toggled(root.locked);
         }
     }
 }

@@ -6,6 +6,9 @@ use std::rc::Rc;
 mod picker;
 mod preview;
 mod downloads;
+mod radial;
+#[cfg(test)]
+use radial::items_to_slint;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
@@ -14,6 +17,7 @@ use std::time::Duration;
 use pet_assets::catalog::Catalog;
 use pet_config::{ClickAction, Config, Paths, SettingsPatch, CLICK_REGIONS};
 use pet_ipc::{Connection, Message, ModelData, SettingsPage};
+use slint::winit_030::WinitWindowAccessor;
 use slint::{ModelRc, Timer, TimerMode, VecModel};
 use tracing::{info, warn};
 
@@ -42,8 +46,15 @@ type Sender = Rc<dyn Fn(&Message) -> bool>;
 
 /// Runs the hidden UI service until the pet process asks it to quit.
 pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
+    let creating_popup = radial::initialize_backend()?;
     let window = SettingsWindow::new()?;
+    creating_popup.set(true);
     let radial = RadialMenu::new()?;
+    // Slint creates its window adapter lazily. Capture the popup attributes
+    // while this component, rather than the settings window, is being built.
+    let _ = radial.window().has_winit_window();
+    creating_popup.set(false);
+    let radial_controller = radial::Controller::new(&radial);
     let bubble = PokeBubble::new()?;
     let _ = bubble.hide();
 
@@ -274,22 +285,26 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
     // ── Radial menu ──────────────────────────────────────────────────────────
     {
         let send = Rc::clone(&send);
+        let controller = Rc::clone(&radial_controller);
         radial.on_action(move |action| {
             send(&Message::MenuAct {
                 action: action.to_string(),
             });
+            controller.dismiss();
         });
     }
     {
         let send = Rc::clone(&send);
+        let controller = Rc::clone(&radial_controller);
         radial.on_locked_toggled(move |locked| {
-            send(&Message::MenuLocked { locked });
+            let sent = send(&Message::MenuLocked { locked });
+            controller.lock_requested(locked, sent);
         });
     }
 
     // ── Message pump ─────────────────────────────────────────────────────────
     let pump_window = window.as_weak();
-    let pump_radial = radial.as_weak();
+    let pump_radial = Rc::clone(&radial_controller);
     let pump_bubble = bubble.as_weak();
     let bubble_timer = Timer::default();
     let bubble_deadline: Rc<std::cell::Cell<std::time::Instant>> =
@@ -324,6 +339,7 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                 } => {
                     let mut parsed: Config = serde_json::from_value(config).unwrap_or_default();
                     parsed.normalize_models();
+                    pump_radial.sync_locked(parsed.drag_locked);
                     if let Ok(mut guard) = pump_shared.config.lock() {
                         *guard = Some(parsed.clone());
                     }
@@ -356,6 +372,7 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                     }
                     let mut parsed: Config = serde_json::from_value(config).unwrap_or_default();
                     parsed.normalize_models();
+                    pump_radial.sync_locked(parsed.drag_locked);
                     if let Ok(mut guard) = pump_shared.config.lock() {
                         *guard = Some(parsed.clone());
                     }
@@ -398,13 +415,7 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                     x,
                     y,
                 } => {
-                    if let Some(radial) = pump_radial.upgrade() {
-                        radial.set_items(ModelRc::new(VecModel::from(items_to_slint(&items))));
-                        radial.set_locked(locked);
-                        // 380x380 window (radius 110 + 80 px item box) centred on the pet.
-                        set_window_position(&radial.window(), x - 190, y - 190);
-                        let _ = radial.show();
-                    }
+                    pump_radial.show(x, y, &items, locked);
                 }
                 Message::Bubble {
                     x,
@@ -422,9 +433,7 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                     }
                 }
                 Message::MenuClose => {
-                    if let Some(radial) = pump_radial.upgrade() {
-                        let _ = radial.hide();
-                    }
+                    pump_radial.dismiss();
                 }
                 Message::OpenSettings { page } => {
                     window.set_page(page_index(page));
@@ -436,9 +445,7 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                 }
                 Message::Quit => {
                     let _ = window.hide();
-                    if let Some(radial) = pump_radial.upgrade() {
-                        let _ = radial.hide();
-                    }
+                    pump_radial.hide();
                     if let Some(bubble) = pump_bubble.upgrade() {
                         let _ = bubble.hide();
                     }
@@ -469,7 +476,7 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
     // must keep the IPC pump alive for subsequent tray/menu requests.
     let result = slint::run_event_loop_until_quit();
     let _ = window.hide();
-    let _ = radial.hide();
+    radial_controller.hide();
     let _ = bubble.hide();
     result.map_err(UiError::Slint)
 }
@@ -488,19 +495,6 @@ fn page_index(page: SettingsPage) -> i32 {
         SettingsPage::About => 3,
         SettingsPage::Downloads => 4,
     }
-}
-
-fn items_to_slint(items: &[pet_ipc::MenuItem]) -> Vec<RadialItem> {
-    items
-        .iter()
-        .enumerate()
-        .map(|(index, item)| RadialItem {
-            action: item.action.clone().into(),
-            label: item.label.clone().into(),
-            glyph: item.glyph.clone().into(),
-            angle: index as f32,
-        })
-        .collect()
 }
 
 fn spawn_client(

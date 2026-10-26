@@ -601,6 +601,7 @@ impl PetApp {
                 for role in &mut self.roles {
                     role.set_behavior_config(&self.config);
                 }
+                self.send_snapshot();
             }
             Message::ResetPositions => self.reset_positions(),
             Message::ModelSelect { character, costume } => {

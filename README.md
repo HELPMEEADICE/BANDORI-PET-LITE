@@ -33,7 +33,7 @@ bandori-ui.exe    常驻隐藏：Slint 设置窗（5 页）+ 径向菜单 + 戳�
 | §3.6 单写者、原子写、校验回落、未知键原样回写、首启动开设置页 | `serde_json::Value` overlay + 临时文件 + `rename` | `crates/pet-config/src/store.rs` |
 | §5 IPC | 命名管道 + 长度前缀 JSON | `crates/pet-ipc` |
 
-尚未完成/替代实现（都在 `docs/ACCEPTANCE.md` 里写明）：径向菜单「点击外部关闭」、Slint 窗口的逐像素透明、`WM_NCHITTEST → HTTRANSPARENT` 安全网、像素模式、i18n 仅中/英两套字符串、点击动作配置的导入/导出 UI。
+尚未完成/替代实现（都在 `docs/ACCEPTANCE.md` 里写明）：气泡窗口的逐像素透明、`WM_NCHITTEST → HTTRANSPARENT` 安全网、像素模式、i18n 仅中/英两套字符串、点击动作配置的导入/导出 UI。
 
 ## 目录
 
@@ -83,6 +83,8 @@ $env:BANDORI_PET_ROOT = "$PWD\run"; .\run\bandori-pet.exe
 ```
 
 环境变量：`BANDORI_PET_ROOT`（安装根目录）、`BANDORI_PET_EXIT_AFTER_SECS`（N 秒后自动退出，CI 用）、`BANDORI_PET_HEADLESS`（不建角色窗口）、`RUST_LOG`。
+
+右键模型会在角色中心呼出灰黑色径向菜单：没有标题栏或矩形底板，按钮之间的透明区域可直接点击下层窗口。四个按钮在 180ms 内由中心向外弹出，点击动作或菜单外部后在 120ms 内收回。点击中心锁按钮立即切换 🔒 / 🔓 并更新拖拽锁定，菜单保持打开，设置页同步显示最新状态。菜单按当前显示器 DPI 缩放，并限制在工作区内。
 
 ## 选队、选角与换装
 

@@ -33,12 +33,11 @@
 
 ## 已知偏差
 
-1. **径向菜单外部点击关闭**：Slint 没有「失焦/点外面」事件，当前靠 pet 在下次右键时重发 `MENU_SHOW` 覆盖旧位置，菜单不会自己消失。规格要求「点击外部关闭」，这是唯一未实现的交互细节。
-2. **Slint 窗口不做逐像素透明**：设置窗、径向菜单、气泡都是不透明窗口（深色面板）。桌宠窗口的透明是 wgpu surface 实现的，不受影响。
-3. **`WM_NCHITTEST → HTTRANSPARENT` 安全网未做**：它只支持同线程窗口间转发，跨进程穿透由 `WS_EX_LAYERED | WS_EX_TRANSPARENT` 控制。窗口现在使用 `SetWindowSubclass` 保留必要样式并处理 `WM_MOUSEACTIVATE`，其余消息交回 winit。
-4. **渲染在主线程**：规格建议 main/render/io 三线程；实现是「事件循环里 `WaitUntil(1/fps)` 节流 + 同线程渲染」，命中是 CPU 计算不阻塞 GPU 提交，实测 60fps 稳定。要拆线程时 `FrameSnapshot` 已经是不可变快照，接口不用改。
-5. **像素模式、i18n 完整化、点击动作配置的导入/导出 UI** 未做（规格标明像素模式 v0 不做 UI；i18n 目前是中/英两套硬编码字符串）。
-6. **`live2d_active_profile`（自定义命名的 profile 保存/选择）** 只支持内置 7 套预设展开；自定义 profile 的数据结构（`click_motion_profiles`）已进配置契约，UI 未提供保存入口。
+1. **气泡窗口的透明**：径向菜单已实现透明背景及按钮间的跨进程穿透；气泡窗口的逐像素透明尚未单独处理。设置窗保持普通面板。
+2. **`WM_NCHITTEST → HTTRANSPARENT` 安全网未做**：它只支持同线程窗口间转发，桌宠的跨进程穿透由 `WS_EX_LAYERED | WS_EX_TRANSPARENT` 控制，径向菜单用 `SetWindowRgn` 排除按钮以外的区域。窗口使用 `SetWindowSubclass` 保留必要样式并处理 `WM_MOUSEACTIVATE`，其余消息交回 winit。
+3. **渲染在主线程**：规格建议 main/render/io 三线程；实现是「事件循环里 `WaitUntil(1/fps)` 节流 + 同线程渲染」，命中是 CPU 计算不阻塞 GPU 提交，实测 60fps 稳定。要拆线程时 `FrameSnapshot` 已经是不可变快照，接口不用改。
+4. **像素模式、i18n 完整化、点击动作配置的导入/导出 UI** 未做（规格标明像素模式 v0 不做 UI；i18n 目前是中/英两套硬编码字符串）。
+5. **`live2d_active_profile`（自定义命名的 profile 保存/选择）** 只支持内置 7 套预设展开；自定义 profile 的数据结构（`click_motion_profiles`）已进配置契约，UI 未提供保存入口。
 
 ## 复现方式
 
@@ -140,3 +139,17 @@ $env:BANDORI_PET_ROOT = "$PWD\run"; $env:RUST_LOG = "info,pet_app=debug"
 * `cargo test -p pet-app --test ui_lifecycle -- --ignored --nocapture`：真实 Windows 设置进程验证启动及配置快照均不弹窗，关闭后继续运行并可重开，设置、径向菜单及气泡同时显示时收到 `QUIT` 后正常退出。
 * `settings_open_request_survives_a_delayed_ui_connection`：打开请求早于 IPC 连接时，连接后收到最新请求；连接后的新请求也正常送达。
 * release 双进程联调：已有 anon 模型配置时设置保持隐藏；无配置且无模型时自动打开设置；两种场景主进程正常退出后均无设置进程残留。启动后立即退出、UI 尚未连接时，1 秒兜底终止也通过验证。
+
+### 2026-10-26 · 灰黑色透明径向菜单与即时锁图标
+
+径向菜单保留 LITE 的灰黑色圆形按钮，移除标题栏及矩形底板。右键模型后按角色中心定位，180ms OutBack 动画向外展开，选择动作或点击外部后以 120ms 动画收回。空白区域通过随动画更新的 Win32 圆形联合区域排除，可直接点击其他进程的下层窗口；原生窗口不激活、不进任务栏。显示位置按显示器 DPI 换算并限制在工作区，支持负坐标显示器。
+
+锁按钮先在当前事件中更新 🔒 / 🔓，再发送 `MENU_LOCKED`，无需等待 IPC 返回或重新打开菜单。主进程回传配置快照同步设置页；等待确认时忽略旧锁状态，发送失败则回退图标。
+
+验证：
+
+* Slint 图像回归覆盖 100% / 150% / 200% DPI，逐点检查角落、按钮间隙、圆角外区域的 alpha=0，按钮保持灰黑色；连续点击锁按钮验证状态与图标像素立即变化。
+* 动画回归检查起点、途中和终点；放置回归覆盖负坐标屏幕、工作区边缘及小于菜单的工作区。
+* `cargo test -p pet-app --test ui_lifecycle -- --ignored --nocapture --test-threads=1`：两个真实 Windows 窗口回归通过。菜单测试在 150% DPI 下验证客户区覆盖整个窗口、没有标题栏和调整大小边框、不夺焦、圆形按钮接收点击、透明点的 `WindowFromPoint` 命中测试进程的下层窗口，连续切锁、外部点击收起、动作派发及多次重新打开均通过。
+* 原生菜单测试分别以 `winit-software` 和默认 `winit-femtovg` 运行通过；记录到展开区域宽度从 0 经 263 / 355 / 421 到 463 物理像素的中间帧。
+* `cargo build --release --bin bandori-pet --bin bandori-ui` 通过，两个程序同步到 `run/`。通过 `BANDORI_UI_TEST_EXE=run/bandori-ui.exe` 对实际 release 程序重跑两个原生窗口回归，均通过。

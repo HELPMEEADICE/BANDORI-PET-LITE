@@ -14,11 +14,14 @@ pet-live2d.workspace = true
 pet-render.workspace = true
 pet-window.workspace = true
 image.workspace = true
-slint.workspace = true
+slint = { workspace = true, features = ["unstable-winit-030"] }
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true
