@@ -124,6 +124,16 @@ impl Moc2Adapter {
         }
     }
 
+    /// Fades every active expression out.
+    pub fn clear_expression(&mut self) {
+        self.model.runtime_mut().stop_expressions();
+    }
+
+    /// Number of expressions still being blended (including fading ones).
+    pub fn active_expression_count(&self) -> usize {
+        self.model.runtime().active_expressions()
+    }
+
     /// Stops all motions.
     pub fn stop_motions(&mut self) {
         self.model.runtime_mut().stop_all_motions();

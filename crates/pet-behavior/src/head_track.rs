@@ -168,6 +168,7 @@ mod tests {
             motion_names,
             expression_names,
             character: "kasumi",
+            motion_finished: true,
         }
     }
 

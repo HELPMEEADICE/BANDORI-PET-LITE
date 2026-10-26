@@ -232,7 +232,6 @@ impl Role {
 
         model.set_auto_blink(true);
         model.set_auto_breath(true);
-        behavior.start(0.0);
 
         info!(
             ms = started.elapsed().as_millis(),
@@ -271,6 +270,11 @@ impl Role {
         };
         role.set_hit_alpha_threshold(config.live2d_hit_alpha_threshold);
         role.apply_display_settings(config);
+        // The configured default motion/expression used to be dropped on the floor
+        // here, so the pet stood in the neutral pose until the first ambient action.
+        for command in role.behavior.start(0.0) {
+            role.apply_command(&command);
+        }
         // Start safe even if the cursor is already in a transparent corner.
         let click_through = role.should_be_click_through(config, 0);
         role.set_click_through(click_through);
@@ -653,6 +657,7 @@ impl Role {
             motion_names: &motion_names,
             expression_names: &expression_names,
             character: &self.character,
+            motion_finished: self.model.is_motion_finished(),
         };
         let commands = self.behavior.tick(&context, self.base_position);
         for command in &commands {
@@ -677,7 +682,11 @@ impl Role {
             Command::PlayExpression(name) => {
                 tracing::debug!(expression = %name, "play expression");
                 if name.is_empty() {
-                    self.model.play_expression("default");
+                    // Bandori models name their expressions after the emotion
+                    // (`smile01`, …) and ship no expression called `default`, so a
+                    // revert has to fade the active one out instead of looking up
+                    // a name that does not exist.
+                    self.model.clear_expression();
                 } else if !self.model.play_expression(name) {
                     warn!(name, "expression not available on this model");
                 }
@@ -810,10 +819,12 @@ impl Role {
             .cloned()
             .collect();
         if let Some(name) = rng.pick(&names).cloned() {
-            self.model.play_motion(&name);
+            if self.model.play_motion(&name) {
+                // Same bookkeeping as a click, so the pet settles back into its
+                // resting motion once the clip is over instead of holding a pose.
+                self.behavior.note_triggered_motion(now);
+            }
         }
-        let peer = None;
-        let _ = self.tick_behavior(now, 0.0, 0.0, peer, self.center());
     }
 
     /// Triggers an emotion displacement.
@@ -893,7 +904,9 @@ impl Role {
         self.model.set_auto_blink(true);
         self.model.set_auto_breath(true);
         self.behavior.set_config(RoleBehaviorConfig::from(config));
-        self.behavior.start(0.0);
+        for command in self.behavior.start(0.0) {
+            self.apply_command(&command);
+        }
         self.window
             .set_title(&format!("{}-{}", self.character, self.costume));
         self.renderer.resize(PhysicalSize::new(width, height), dpr);

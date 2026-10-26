@@ -936,6 +936,7 @@ impl ApplicationHandler for PetApp {
                                 motion_names: &motion_names,
                                 expression_names: &expression_names,
                                 character: &character,
+                                motion_finished: role.model.is_motion_finished(),
                             };
                             for command in role.on_click(region, &context) {
                                 role.apply_external_command(&command);

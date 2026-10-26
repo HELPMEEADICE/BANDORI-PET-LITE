@@ -213,3 +213,24 @@ $env:BANDORI_PET_ROOT = "$PWD\run"; $env:RUST_LOG = "info,pet_app=debug"
 * `model_framing`：kasumi / live_default（moc）窗口 627×657，脸部 120.07 像素；anon / casual_spring_01（moc3）窗口 619×932，脸部 120.01 像素。94 组动作各采样 6 秒、20 FPS，共 11,280 帧，同时切换极限视线方向，可见网格均位于窗口内。离屏图像检查确认两者上半身比例一致，moc3 全身完整显示，四周留白充足。
 * `BANDORI_PET_TEST_ROOT=run` 下执行 `cargo test -p pet-app --test window_input --test multi_role_runtime -- --ignored --nocapture --test-threads=1`：2 passed。真实 Windows / Vulkan 窗口验证启动、动态缩放、换装、添加/移除、位置恢复、透明区穿透和不夺焦；全部七区在增加留白和缩放后仍匹配原来的内容比例。
 * `cargo build --release --bin bandori-pet --bin bandori-ui` 通过，两个程序同步到 `run/`。
+
+### 2026-10-27 · 动作切换交叉淡化、动作结束回位与表情复位
+
+触发点击动作或待机动作时，新片段的第一帧会整帧写进参数，片段结束又把参数交回默认值，于是「上一个动作 → 下一个动作」是一帧完成的瞬移：真实 anon（moc3）上，切换帧最大顶点位移为 0.539（clip 空间，1.0 等于整张画布），而同一片段正常播放时只有 0.0043。片段自然结束那一帧同样直接回到中立姿势。
+
+新增 `pet-live2d::transition::PoseTransition`：换动作、动作结束、`stop_motions` 时记下当前屏幕上的姿势，按 0.28 秒余弦曲线过渡到实时姿势，参数与 moc3 的 `PartOpacity` 一起插值。淡化安排在 `expression` 之后、`apply_parameter_overrides` 之前，视线/眨眼覆盖仍然即时生效；物理在其后，摆动照常在混合后的姿势上计算。moc2 的动作本来就由模型声明的 1000 ms 淡入淡出完成切换，结束时停住的姿势由行为层的回位命令（同样带淡入）接走，因此不需要第二套淡化。
+
+行为层原来有两个计时器同时触发：9 秒强制清除与 1.8/3.2 秒「已结束则回默认」被写成互斥分支，清除后下一帧又会再发一条动作命令，等于在同一个动作上重启一次。现在每次触发只发一条命令：动作自己结束时回到休息动作（配置的 `default_motion`，空则用模型 idle 组），只有一直不结束的片段才在 9 秒（径向菜单 8 秒）处截断；两处计时器互相取消。径向菜单的动作也走同一套计时。
+
+`RoleBehavior::start` 返回的默认动作/表情命令原来被直接丢掉，配置里的 `default_motion` 在启动和换装后从未真正播放，桌宠要等 5 秒后的第一次待机动作才有动作；现在启动和换装都会执行这些命令，首次播放同样经过交叉淡化。
+
+表情档位另有两处缺陷一并修好。`PlayExpression("")` 原来去播放一个名为 `default` 的表情，而 Bandori `.exp3.json` 按情绪命名（`exp_smile01` 等），复位永远失败；现在改为淡出当前表情。更根本的是 `exp3.json` 的 `Blend` 在真实文件里是整数（0 加算 / 1 乘算 / 2 覆盖），Neocari 的解析器只接受字符串，导致**所有** Bandori 表情加载失败、点击表情从未生效；解析器改为同时接受整数与字符串，非法值仍报错。
+
+验证：
+
+* `cargo test --workspace`：159 passed、0 failed、8 ignored。新增 `PoseTransition` 5 个单测（权重曲线、插值、部件透明度、零时长、取消）、行为层 3 个计时单测（结束回位只发一次、长片段只在硬停截断一次、径向菜单同样回位）、Neocari 3 个 `Blend` 解析单测。
+* `BANDORI_PET_TEST_MOC3=<anon .model3.json> cargo test -p pet-live2d --test pose_transitions -- --nocapture`：切换首帧 0.0072、0.28 秒窗口内峰值 0.0755（旧实现单帧 0.539）；片段结束触发淡化并在 17 帧后完成，稳定后 0.0004；表情淡出 61 帧（`FadeOutTime` 1.0 秒）。
+* `BANDORI_PET_TEST_MODELS=run/models cargo test -p pet-app --test model_framing`：kasumi（moc）与 anon（moc3）各 94 组动作、每组 6 秒、20 FPS 共 11,280 帧，全部网格仍在窗口内，淡化路径未越界。
+* `cargo test --manifest-path vendor/neocari/Cargo.toml --lib`：42 passed、0 failed、1 ignored。
+* `cargo clippy --workspace --all-targets`：改动文件没有新增告警。
+

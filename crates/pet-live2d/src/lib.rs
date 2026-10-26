@@ -13,12 +13,14 @@ mod blink;
 mod framing;
 mod moc2;
 mod moc3;
+mod transition;
 
 use std::path::Path;
 
 pub use blink::{BlinkBreath, BlinkOutput};
 pub use moc2::Moc2Adapter;
 pub use moc3::Moc3Adapter;
+pub use transition::{DEFAULT_POSE_FADE_SECONDS, PoseTransition};
 
 use neocari::assets::DecodedTexture;
 use neocari::moc3::Moc3DrawableMesh;
@@ -163,6 +165,22 @@ impl ModelHandle {
         match self {
             ModelHandle::Moc2(adapter) => adapter.play_expression(name),
             ModelHandle::Moc3(adapter) => adapter.play_expression(name),
+        }
+    }
+
+    /// Fades every active expression out, returning to the neutral face.
+    pub fn clear_expression(&mut self) {
+        match self {
+            ModelHandle::Moc2(adapter) => adapter.clear_expression(),
+            ModelHandle::Moc3(adapter) => adapter.clear_expression(),
+        }
+    }
+
+    /// Number of expressions still being blended (including fading ones).
+    pub fn active_expression_count(&self) -> usize {
+        match self {
+            ModelHandle::Moc2(adapter) => adapter.active_expression_count(),
+            ModelHandle::Moc3(adapter) => adapter.active_expression_count(),
         }
     }
 

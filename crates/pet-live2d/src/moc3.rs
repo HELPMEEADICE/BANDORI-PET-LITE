@@ -23,6 +23,7 @@ use pet_config::ModelFormat;
 use pet_util::Rng;
 
 use crate::blink::BlinkBreath;
+use crate::transition::PoseTransition;
 use crate::{Live2dError, ModelInfo};
 
 /// Parameter ids used for cursor tracking on Bandori `.moc3` models.
@@ -55,6 +56,8 @@ pub struct Moc3Adapter {
     motion_cache: HashMap<PathBuf, Motion3>,
     expression_cache: HashMap<String, Expression3>,
     player: Option<PlayingMotion>,
+    /// Cross-fades the pose across motion starts, ends and replacements.
+    transition: PoseTransition,
     expressions: ExpressionManager,
     blink: BlinkBreath,
     eye_blink_ids: Vec<String>,
@@ -138,6 +141,7 @@ impl Moc3Adapter {
             motion_cache: HashMap::new(),
             expression_cache: HashMap::new(),
             player: None,
+            transition: PoseTransition::default(),
             expressions: ExpressionManager::new(),
             blink: BlinkBreath::new(seed),
             eye_blink_ids,
@@ -186,6 +190,7 @@ impl Moc3Adapter {
         let Self {
             model,
             player,
+            transition,
             expressions,
             eye_blink_ids,
             view,
@@ -215,16 +220,40 @@ impl Moc3Adapter {
             runtime.set_parameter_override(PARAM_MOUTH_OPEN_Y, *mouth_open);
         }
 
+        let mut motion_ended = false;
         if let Some(playing) = player.as_mut() {
             playing.player.tick(delta);
             playing.player.apply(runtime);
             if playing.player.is_finished() {
                 *player = None;
+                motion_ended = true;
             }
         }
 
         expressions.tick(delta);
         expressions.apply(runtime);
+
+        // Ease the pose that was on screen into the live one. This runs before the
+        // overrides so drag/blink stay immediate, and before physics so the sway is
+        // still simulated on the blended pose.
+        if let Some(weight) = transition.advance(delta) {
+            let parameter_count = runtime.parameter_values().len();
+            for index in 0..parameter_count {
+                let Some(live) = runtime.parameter_value_by_index(index) else {
+                    continue;
+                };
+                let value = transition.blend_parameter(index, live, weight);
+                runtime.set_parameter_by_index(index, value);
+            }
+            let part_count = runtime.part_count();
+            for index in 0..part_count {
+                let live = runtime.part_opacity_override_by_index(index);
+                if let Some(value) = transition.blend_part_opacity(index, live, weight) {
+                    runtime.set_part_opacity_by_index(index, value);
+                }
+            }
+        }
+
         runtime.apply_parameter_overrides();
         runtime.apply_physics(delta);
         runtime.apply_pose(delta);
@@ -233,10 +262,19 @@ impl Moc3Adapter {
             tracing::warn!("moc3 mesh rebuild failed");
             return false;
         }
+
+        // A clip that ended on its own keeps its final pose for this frame; start
+        // the fade from there so dropping the player cannot snap to the default.
+        if motion_ended {
+            begin_pose_fade(transition, model);
+        }
         true
     }
 
     /// Plays the first motion of a group.
+    ///
+    /// The pose on screen is kept as the source of a short cross-fade, so
+    /// replacing a running clip never snaps.
     pub fn play_motion(&mut self, group: &str) -> bool {
         let Some(paths) = self.motion_paths.get(group) else {
             tracing::warn!(group, "unknown moc3 motion group");
@@ -258,11 +296,32 @@ impl Moc3Adapter {
                 }
             },
         };
+        self.begin_pose_fade();
         self.player = Some(PlayingMotion {
             group: group.to_owned(),
             player: MotionPlayer::with_looping(motion, false),
         });
         true
+    }
+
+    /// Cross-fade length for motion changes, in seconds.
+    pub fn motion_fade_seconds(&self) -> f32 {
+        self.transition.duration()
+    }
+
+    /// Replaces the cross-fade length; `0.0` restores instant switching.
+    pub fn set_motion_fade_seconds(&mut self, seconds: f32) {
+        self.transition.set_duration(seconds);
+    }
+
+    /// Whether a motion change is currently being cross-faded.
+    pub fn is_transitioning(&self) -> bool {
+        self.transition.is_active()
+    }
+
+    /// Captures the current pose as the source of the next cross-fade.
+    fn begin_pose_fade(&mut self) {
+        begin_pose_fade(&mut self.transition, &self.model);
     }
 
     /// Plays an expression by name.
@@ -289,8 +348,19 @@ impl Moc3Adapter {
         true
     }
 
-    /// Stops motions and expressions.
+    /// Fades every active expression out.
+    pub fn clear_expression(&mut self) {
+        self.expressions.stop_all();
+    }
+
+    /// Number of expressions still being blended (including fading ones).
+    pub fn active_expression_count(&self) -> usize {
+        self.expressions.active_expression_count()
+    }
+
+    /// Stops motions and expressions, fading the current pose out.
     pub fn stop_motions(&mut self) {
+        self.begin_pose_fade();
         self.player = None;
         self.expressions.stop_all();
     }
@@ -343,4 +413,14 @@ impl Moc3Adapter {
     pub fn runtime(&self) -> &RuntimeModel {
         &self.model
     }
+}
+
+/// Snapshots the visible pose (parameters and part opacities) for a cross-fade.
+fn begin_pose_fade(transition: &mut PoseTransition, model: &RuntimeModel) {
+    let runtime = model.runtime();
+    let parameters = runtime.parameter_values().to_vec();
+    let part_opacities = (0..runtime.part_count())
+        .map(|index| runtime.part_opacity_override_by_index(index))
+        .collect::<Vec<_>>();
+    transition.begin(&parameters, &part_opacities);
 }

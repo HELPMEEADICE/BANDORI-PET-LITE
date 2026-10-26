@@ -124,7 +124,9 @@ cargo test -p pet-app --test window_input -- --ignored --nocapture
 
 `window_input` 回归会短暂移动鼠标，验证 moc / moc3 在鼠标移出窗口及窗口穿透时仍能追踪视线、透明区的 Windows 实际命中目标、模型区恢复交互、拖拽保持、启动隐藏，以及显示/隐藏、缩放和 OBS 切换后穿透与不夺焦仍有效。视线追踪每帧读取系统全局鼠标位置，并换算为窗口局部物理像素坐标。桌宠使用 winit 的 `set_cursor_hittest` 同步穿透状态，并通过 `SetWindowSubclass` 在 `WM_STYLECHANGING` 中保留分层、不激活和工具窗口样式；任务栏隐藏同时交给 winit 管理，OBS 兼容模式也不显示任务栏按钮。两个 exe 都使用 Windows GUI 子系统，启动时不会额外弹出控制台。
 
-**帧序固定**（抄 Neocari `examples/show_model.rs`）：mask pass → main pass（`LoadOp::Clear(alpha=0)`）→ blit 到 swapchain。moc3 的每帧顺序是 `reset_parameters → reset_part_opacities → 覆盖参数（视线/眨眼/呼吸/口型）→ motion tick/apply → expression tick/apply → apply_parameter_overrides → apply_physics → apply_pose → update_meshes`；moc 全部塞在 `Moc2RuntimeModel::update(dt)` 里。
+**帧序固定**（抄 Neocari `examples/show_model.rs`）：mask pass → main pass（`LoadOp::Clear(alpha=0)`）→ blit 到 swapchain。moc3 的每帧顺序是 `reset_parameters → reset_part_opacities → 覆盖参数（视线/眨眼/呼吸/口型）→ motion tick/apply → expression tick/apply → 位姿交叉淡化 → apply_parameter_overrides → apply_physics → apply_pose → update_meshes`；moc 全部塞在 `Moc2RuntimeModel::update(dt)` 里。
+
+**动作切换是交叉淡化，不是硬切。** Neocari 的 `MotionPlayer` 会把新动作的第一帧整帧写进参数，动作结束时又把参数交回默认值；逐帧切换就会看到姿势瞬移。`pet-live2d` 的 `PoseTransition` 在换动作、动作结束和停止动作时记住上一帧屏幕上的姿势，用 0.28 秒余弦曲线过渡到新姿势，参数与部件透明度一起插值。淡化放在视线/眨眼覆盖参数之前，所以头部追随仍然即时；放在物理之前，所以摆动仍在混合后的姿势上计算。`RoleBehavior` 每次触发只发一条动作命令：动作自己结束后回到休息动作，只有一直不结束的片段才在 9 秒（径向菜单 8 秒）处截断。
 
 **Y 轴方向按格式区分。** Cubism 2 的 `.moc` 坐标是画布像素、原点在左上、y 向下；Cubism 3/4/5 是 y 向上的模型空间。Neocari 的 `moc2::layout` 和 `render_moc2` 示例都写明了这一点，所以 `fit_matrix(..., flip_y)` 对 moc 取负的 y 缩放、对 moc3 保持正向。判错的后果是角色上下颠倒，且 7 区点击区域一起错。回归测试 `crates/pet-app/tests/orientation.rs` 会检查真实模型落在哪种坐标系里。
 
