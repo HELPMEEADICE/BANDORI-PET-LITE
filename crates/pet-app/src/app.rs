@@ -791,19 +791,7 @@ impl PetApp {
             let role = &mut self.roles[index];
             role.advance_model(dt);
             let idle_seconds = now; // the behavior keeps its own interaction clock
-            let commands = role.tick_behavior(now, dt, idle_seconds, nearest_peer, own);
-            for command in &commands {
-                if let pet_behavior::Command::Bubble(text) = command {
-                    let (x, y) = role.bubble_anchor();
-                    self.ipc.send(&Message::Bubble {
-                        x,
-                        y,
-                        text: text.clone(),
-                        duration_ms: 1980,
-                    });
-                }
-            }
-            let _ = index;
+            role.tick_behavior(now, dt, idle_seconds, nearest_peer, own);
             role.guard_topmost(self.config.game_topmost);
             role.poll_passthrough(&self.config, now_ms);
         }
@@ -930,7 +918,6 @@ impl ApplicationHandler for PetApp {
                         let cursor = role.cursor_local().unwrap_or((0.0, 0.0));
                         let (moved, delta) = role.on_left_release();
                         if !moved {
-                            let double = role.register_click(cursor);
                             let now = interaction_time;
                             let region = role.region_at(cursor);
                             let size = role.window.inner_size();
@@ -950,22 +937,8 @@ impl ApplicationHandler for PetApp {
                                 expression_names: &expression_names,
                                 character: &character,
                             };
-                            let commands = if double {
-                                role.on_double_click(region, &context)
-                            } else {
-                                role.on_click(region, &context)
-                            };
-                            let (bubble_x, bubble_y) = role.bubble_anchor();
-                            for command in commands {
+                            for command in role.on_click(region, &context) {
                                 role.apply_external_command(&command);
-                                if let pet_behavior::Command::Bubble(text) = &command {
-                                    self.ipc.send(&Message::Bubble {
-                                        x: bubble_x,
-                                        y: bubble_y,
-                                        text: text.clone(),
-                                        duration_ms: 1980,
-                                    });
-                                }
                             }
                             self.config_dirty = true;
                         } else if delta.0.abs() + delta.1.abs() > 0.0 {

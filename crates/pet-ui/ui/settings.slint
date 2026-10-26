@@ -107,10 +107,6 @@ export component SettingsWindow inherits Window {
     in-out property <bool> hide-model: false;
     in-out property <bool> move-together: false;
     in-out property <int> preset-index: 0;
-    in property <int> poke-motion-index;
-    in property <int> poke-expression-index;
-    in-out property <string> poke-motion;
-    in-out property <string> poke-expression;
 
     callback apply-selection(string, string);
     callback patch-number(string, float);
@@ -257,18 +253,6 @@ export component SettingsWindow inherits Window {
                                             }
                                         }
                                         Hint { text: "选择新的角色或服装"; horizontal-alignment: center; }
-                                        Heading { text: "戳一戳动作"; color: Colors.muted; horizontal-alignment: center; }
-                                        HorizontalLayout {
-                                            spacing: 8px;
-                                            ComboBox { model: root.motion-options; current-index: root.poke-motion-index; enabled: root.has-model; selected(value) => { root.patch-string("poke_motion", value == "自动匹配" ? "" : (value == "随机动作" ? "__random__" : (value == "不触发" ? "__none__" : value))); } }
-                                            ActionButton { text: "默认"; width: 54px; enabled: root.has-model; clicked => { root.patch-string("poke_motion", ""); } }
-                                        }
-                                        Heading { text: "戳一戳表情"; color: Colors.muted; horizontal-alignment: center; }
-                                        HorizontalLayout {
-                                            spacing: 8px;
-                                            ComboBox { model: root.expression-options; current-index: root.poke-expression-index; enabled: root.has-model; selected(value) => { root.patch-string("poke_expression", value == "自动匹配" ? "" : (value == "随机动作" ? "__random__" : (value == "不触发" ? "__none__" : value))); } }
-                                            ActionButton { text: "默认"; width: 54px; enabled: root.has-model; clicked => { root.patch-string("poke_expression", ""); } }
-                                        }
                                         Heading { text: "点击动作反馈"; color: Colors.muted; horizontal-alignment: center; }
                                         Hint { text: "为七个点击区域分别设置动作与表情，自动匹配会按区域选择合适反馈。"; horizontal-alignment: center; }
                                         ActionButton { text: "配置点击动作反馈 →"; clicked => { root.page = 2; } }
@@ -715,33 +699,6 @@ export component RadialMenu inherits Window {
         if (root.interactive) {
             root.locked = !root.locked;
             root.locked-toggled(root.locked);
-        }
-    }
-}
-
-
-export component PokeBubble inherits Window {
-    title: "bandori-pet-bubble";
-    preferred-width: 220px;
-    preferred-height: 56px;
-    background: transparent;
-
-    in-out property <string> text: "戳了你一下";
-
-    Rectangle {
-        width: parent.width;
-        height: parent.height;
-        border-radius: 16px;
-        background: #e4004f;
-        border-width: 1px;
-        border-color: #ffffffcc;
-        Text {
-            text: root.text;
-            color: #ffffff;
-            font-size: 13px;
-            font-weight: 700;
-            horizontal-alignment: center;
-            vertical-alignment: center;
         }
     }
 }

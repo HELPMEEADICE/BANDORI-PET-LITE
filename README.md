@@ -6,7 +6,7 @@
 
 ```
 bandori-pet.exe   常驻：桌宠窗口（每角色一个）、wgpu surface、托盘、config.json 唯一写者
-bandori-ui.exe    常驻隐藏：Slint 设置窗（5 页）+ 径向菜单 + 戳一戳气泡
+bandori-ui.exe    常驻隐藏：Slint 设置窗（5 页）+ 径向菜单
 ```
 
 两个进程用命名管道交换 `CONFIG_SNAPSHOT` / `SETTINGS_PATCH` 等消息，见 `crates/pet-ipc`。
@@ -24,16 +24,16 @@ bandori-ui.exe    常驻隐藏：Slint 设置窗（5 页）+ 径向菜单 + 戳�
 | §2.3 熔断：连续 3 帧失败停渲染 | `FAILURE_FUSE = 3` | `crates/pet-render` |
 | §2.4 CPU 命中：AABB → 三角形 → 纹理 alpha>8；120ms/12px 稳定性补偿 | 纯 CPU，零 GPU 回读 | `crates/pet-input/src/hit.rs` |
 | §2.4 穿透：动态 `WS_EX_TRANSPARENT`，16ms/125ms 双档轮询，80ms/12px 补偿 | 轮询 + 样式切换 | `crates/pet-app`、`crates/pet-window` |
-| §2.5 拖拽（<4px 视为单击）、单击、双击 poke、右键径向菜单、托盘 | 全局坐标拖拽（避免窗口移动回授） | `crates/pet-app/src/role.rs` |
+| §2.5 拖拽（<4px 视为单击）、单击动作、右键径向菜单、托盘 | 全局坐标拖拽（避免窗口移动回授） | `crates/pet-app/src/role.rs` |
 | §2.6 7 区判定 + 4 级名称匹配 + 7 套预设 + 标签→表情表 + `""`/`__random__`/`__none__` | 逐条复刻自 Python 原版（含 `thinking` 候选扩展与 `f01` 兜底） | `crates/pet-input/src/{region,matching}.rs`、`crates/pet-config/src/presets.rs` |
-| §2.7 待机/随机/时段/靠近/对视/poke/情绪位移 | 5s tick、180s 冷却、7min 发呆、18min 睡眠、600px 视线上限、6 种窗口位移 | `crates/pet-behavior` |
+| §2.7 待机/随机/时段/靠近/对视/情绪位移 | 5s tick、180s 冷却、7min 发呆、18min 睡眠、600px 视线上限、6 种窗口位移 | `crates/pet-behavior` |
 | §2.8 多角色：一模型一窗口、共享 GPU、一起拖动、位置 14 字段持久化 | `models[]` → 多 `Role` | `crates/pet-app`、`crates/pet-window/src/placement.rs` |
 | §3 设置窗 + 生效分级（Instant/ReloadModel/RebuildWindow/RestartApp） | Slint + 补丁路由；新增模型下载与更新页 | `crates/pet-ui`、`crates/pet-config/src/patch.rs` |
 | 模型下载与更新 | ModelScope 角色包、批量下载/更新、进度与取消、校验后原子替换、列表刷新与已运行角色重载 | `crates/pet-assets/src/download.rs`、`crates/pet-ui/src/downloads.rs` |
 | §3.6 单写者、原子写、校验回落、未知键原样回写、首启动开设置页 | `serde_json::Value` overlay + 临时文件 + `rename` | `crates/pet-config/src/store.rs` |
 | §5 IPC | 命名管道 + 长度前缀 JSON | `crates/pet-ipc` |
 
-尚未完成/替代实现（都在 `docs/ACCEPTANCE.md` 里写明）：气泡窗口的逐像素透明、`WM_NCHITTEST → HTTRANSPARENT` 安全网、像素模式、i18n 仅中/英两套字符串、点击动作配置的导入/导出 UI。
+尚未完成/替代实现（都在 `docs/ACCEPTANCE.md` 里写明）：`WM_NCHITTEST → HTTRANSPARENT` 安全网、像素模式、i18n 仅中/英两套字符串、点击动作配置的导入/导出 UI。
 
 ## 目录
 
@@ -46,9 +46,9 @@ crates/
   pet-render/               wgpu 设备、surface、mask+main+blit 三 pass、画质与不透明度
   pet-window/               Win32 样式/穿透/DWM、显示器枚举、位置持久化、自启动
   pet-input/                CPU 命中、区域判定、名称匹配、AUTO 桶、预设展开
-  pet-behavior/             待机/随机/时段/视线/对视/poke/情绪位移
+  pet-behavior/             待机/随机/时段/视线/对视/情绪位移
   pet-ipc/                  命名管道协议
-  pet-ui/                   Slint 设置窗 + 径向菜单 + 气泡（`ui/settings.slint`）
+  pet-ui/                   Slint 设置窗 + 径向菜单（`ui/settings.slint`）
   pet-app/                  事件循环、角色窗口、托盘、IPC 宿主、UI 进程守护、两个 bin
   pet-util/                 RNG、缓动、时段分档
 vendor/neocari/             Neocari @ ba9de37 的 vendored 源码（见 PATCHES.md）

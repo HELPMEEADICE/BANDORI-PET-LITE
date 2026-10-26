@@ -55,9 +55,6 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
     let _ = radial.window().has_winit_window();
     creating_popup.set(false);
     let radial_controller = radial::Controller::new(&radial);
-    let bubble = PokeBubble::new()?;
-    let _ = bubble.hide();
-
     let index = pet_assets::index::load_or_scan(&paths.models());
     let catalog = Rc::new(RefCell::new(Catalog::build(&paths.assets(), &index)));
     info!(
@@ -305,21 +302,6 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
     // ── Message pump ─────────────────────────────────────────────────────────
     let pump_window = window.as_weak();
     let pump_radial = Rc::clone(&radial_controller);
-    let pump_bubble = bubble.as_weak();
-    let bubble_timer = Timer::default();
-    let bubble_deadline: Rc<std::cell::Cell<std::time::Instant>> =
-        Rc::new(std::cell::Cell::new(std::time::Instant::now()));
-    {
-        let pump_bubble_tick = pump_bubble.clone();
-        let bubble_deadline_tick = Rc::clone(&bubble_deadline);
-        bubble_timer.start(TimerMode::Repeated, Duration::from_millis(120), move || {
-            if let Some(bubble) = pump_bubble_tick.upgrade() {
-                if std::time::Instant::now() >= bubble_deadline_tick.get() {
-                    let _ = bubble.hide();
-                }
-            }
-        });
-    }
     let pump_shared = Arc::clone(&shared);
     let pump_send = Rc::clone(&send);
     let pump_paths = paths.clone();
@@ -417,21 +399,6 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                 } => {
                     pump_radial.show(x, y, &items, locked);
                 }
-                Message::Bubble {
-                    x,
-                    y,
-                    text,
-                    duration_ms,
-                } => {
-                    if let Some(bubble) = pump_bubble.upgrade() {
-                        bubble.set_text(text.into());
-                        set_window_position(&bubble.window(), x - 110, y - 60);
-                        bubble_deadline.set(
-                            std::time::Instant::now() + Duration::from_millis(duration_ms as u64),
-                        );
-                        let _ = bubble.show();
-                    }
-                }
                 Message::MenuClose => {
                     pump_radial.dismiss();
                 }
@@ -446,9 +413,6 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                 Message::Quit => {
                     let _ = window.hide();
                     pump_radial.hide();
-                    if let Some(bubble) = pump_bubble.upgrade() {
-                        let _ = bubble.hide();
-                    }
                     let _ = slint::quit_event_loop();
                     return;
                 }
@@ -477,14 +441,7 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
     let result = slint::run_event_loop_until_quit();
     let _ = window.hide();
     radial_controller.hide();
-    let _ = bubble.hide();
     result.map_err(UiError::Slint)
-}
-
-/// Places a Slint window at physical screen coordinates.
-fn set_window_position(window: &slint::Window, x: i32, y: i32) {
-    use slint::PhysicalPosition;
-    window.set_position(PhysicalPosition::new(x.max(0), y.max(0)));
 }
 
 fn page_index(page: SettingsPage) -> i32 {
@@ -673,8 +630,6 @@ fn apply_config_to_window(
         window.set_hide_model(config.hide_live2d_model);
     }
     window.set_move_together(config.move_all_roles_together);
-    window.set_poke_motion(config.poke_motion.clone().into());
-    window.set_poke_expression(config.poke_expression.clone().into());
 
     window.set_has_model(!config.models.is_empty());
     window.set_active_model_index(
@@ -743,8 +698,6 @@ fn apply_config_to_window(
     let expression_options = build_options(&model.expressions);
     window.set_motion_options(ModelRc::new(VecModel::from(motion_options.clone())));
     window.set_expression_options(ModelRc::new(VecModel::from(expression_options.clone())));
-    window.set_poke_motion_index(option_index(&config.poke_motion, &motion_options));
-    window.set_poke_expression_index(option_index(&config.poke_expression, &expression_options));
     window.set_preset_index(
         [
             "auto",

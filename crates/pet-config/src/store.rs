@@ -161,6 +161,13 @@ fn corrupt_backup_path(path: &Path) -> PathBuf {
 pub fn sanitize(config: &mut Config) -> Vec<String> {
     let mut warnings = Vec::new();
 
+    let removed_poke_motion = config.extras.remove("poke_motion").is_some();
+    let removed_poke_expression = config.extras.remove("poke_expression").is_some();
+    let removed_poke_settings = removed_poke_motion || removed_poke_expression;
+    if removed_poke_settings {
+        warnings.push("removed obsolete poke settings".to_owned());
+    }
+
     if config.schema_version != SCHEMA_VERSION {
         warnings.push(format!(
             "schema_version {} -> {}",

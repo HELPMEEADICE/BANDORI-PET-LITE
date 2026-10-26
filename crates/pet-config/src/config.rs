@@ -414,10 +414,6 @@ pub struct Config {
     /// Window-level emotion displacement.
     pub emotion_behavior_enabled: bool,
 
-    /// Motion used by double-click poke; empty = follow the head region action.
-    pub poke_motion: String,
-    /// Expression used by double-click poke; empty = follow the head region action.
-    pub poke_expression: String,
     /// Name of the active click profile (empty = inline `click_motion_actions`).
     pub click_motion_active_profile: String,
     /// Seven-region click mapping.
@@ -467,8 +463,6 @@ impl Default for Config {
             live2d_random_actions_enabled: true,
             emotion_behavior_enabled: true,
 
-            poke_motion: String::new(),
-            poke_expression: String::new(),
             click_motion_active_profile: String::new(),
             click_motion_actions: default_click_actions(),
             click_motion_profiles: Vec::new(),

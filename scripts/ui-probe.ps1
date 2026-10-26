@@ -81,7 +81,6 @@ function Get-ExStyle { param([IntPtr]$Handle) [PetProbe]::ExStyle($Handle) }
 function Test-ClickThrough { param([IntPtr]$Handle) ((Get-ExStyle $Handle) -band 0x20) -ne 0 }
 function Move-CursorTo { param([int]$X, [int]$Y) [PetProbe]::SetCursorPos($X, $Y) | Out-Null }
 function Invoke-Click { param([int]$X, [int]$Y) [PetProbe]::Click($X, $Y) }
-function Invoke-DoubleClick { param([int]$X, [int]$Y) [PetProbe]::Click($X,$Y); Start-Sleep -Milliseconds 130; [PetProbe]::Click($X,$Y) }
 function Invoke-RightClick { param([int]$X, [int]$Y) [PetProbe]::RightClick($X, $Y) }
 function Invoke-PetDrag {
     param([int]$FromX, [int]$FromY, [int]$ToX, [int]$ToY, [int]$Steps = 8)

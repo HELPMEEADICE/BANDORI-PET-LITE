@@ -10,7 +10,7 @@
 | 3 | 按在头发上拖动跟手；划过透明区点到桌面 | ✅ | 原拖拽实测窗口位移 (120,−40) 与注入位移一致。新增 `window_input` 真实窗口回归对 moc/moc3 均验证 `WindowFromPoint` 在透明区命中下层窗口、移到模型上命中桌宠，再回透明区命中下层；拖拽经过透明区保持接收鼠标，松手后恢复穿透。 |
 | 4 | 缩放 25% / 500% 后窗口重建、命中仍准 | ⚠️ 部分 | 尺寸推导与命中都在同一内容包围盒/同一矩阵上做（`fit_matrix` 与 `hit_test` 共用 `self.matrix`），`sizing.rs` 有 25%/500% 尺寸单测；两个极端值的联调未跑（会占满屏幕）。 |
 | 5 | 7 区分别配动作、逐区点击；`不触发` 区无反应 | ✅ | 7 区判定与预设展开有 22 个单测（含阈值 0.38/0.64/0.62、`__none__` 直接返回空命令、`genki`/`tsundere` 展开结果）。联调点击窗口 10% / 50% / 90% 高度：日志分别是 `region="head"` / `"upper_body_left"` / `"lower_body_center"`，动作按 AUTO 桶命中 `surprised01` / `shame01`。 |
-| 6 | 双击 → 动作 + 抖动 + 气泡；连续 20 次不累积 | ✅（气泡与动作实测，20 次压力未单独跑） | 双击后日志 `play motion motion=shame01`；气泡窗口 `bandori-pet-bubble` `vis=True rect=2217,864,352x140`，~1980ms 后 `vis=False`。状态都在 `PokeState`/`FeedbackTimers` 里按时间戳覆盖，不累积队列。 |
+| 6 | 双击专用反馈（已移除） | — | 双击现在按两次普通点击处理；戳一戳动作、抖动、气泡及设置入口均已删除。旧配置中的 `poke_motion` / `poke_expression` 在加载时丢弃。 |
 | 7 | 换角色 ≤1s 热重载，位置缩放保持 | ✅ | 双角色启动日志：kasumi `ms=1025`、anon（moc3，复用同一 GPU）`ms=145`；`swap_model` 不重建窗口，位置取自 `window_placement`。 |
 | 8 | 画质切省电 → 渲染分辨率 0.75× | ✅ | `SceneRenderer::render_size()` 在 0.75× 时返回 `(307,562)`（410×750 的 0.75）；`scale_dim` 单测覆盖 0.75/1.0/0.25。 |
 | 9 | 改 vsync / OBS 兼容后仍透明、仍能穿透 | ✅（OBS 原生窗口回归；vsync 重配未另做联调） | `apply_obs_capture` 更新样式子类回调的 OBS 标志，切换 `WS_EX_TOOLWINDOW ↔ WS_EX_APPWINDOW`，保留 `NOACTIVATE/LAYERED` 并通过 winit 隐藏任务栏按钮。`window_input` 验证切换后穿透仍可开关；vsync 走 `Surface::reconfigure`。 |
@@ -33,11 +33,10 @@
 
 ## 已知偏差
 
-1. **气泡窗口的透明**：径向菜单已实现透明背景及按钮间的跨进程穿透；气泡窗口的逐像素透明尚未单独处理。设置窗保持普通面板。
-2. **`WM_NCHITTEST → HTTRANSPARENT` 安全网未做**：它只支持同线程窗口间转发，桌宠的跨进程穿透由 `WS_EX_LAYERED | WS_EX_TRANSPARENT` 控制，径向菜单用 `SetWindowRgn` 排除按钮以外的区域。窗口使用 `SetWindowSubclass` 保留必要样式并处理 `WM_MOUSEACTIVATE`，其余消息交回 winit。
-3. **渲染在主线程**：规格建议 main/render/io 三线程；实现是「事件循环里 `WaitUntil(1/fps)` 节流 + 同线程渲染」，命中是 CPU 计算不阻塞 GPU 提交，实测 60fps 稳定。要拆线程时 `FrameSnapshot` 已经是不可变快照，接口不用改。
-4. **像素模式、i18n 完整化、点击动作配置的导入/导出 UI** 未做（规格标明像素模式 v0 不做 UI；i18n 目前是中/英两套硬编码字符串）。
-5. **`live2d_active_profile`（自定义命名的 profile 保存/选择）** 只支持内置 7 套预设展开；自定义 profile 的数据结构（`click_motion_profiles`）已进配置契约，UI 未提供保存入口。
+1. **`WM_NCHITTEST → HTTRANSPARENT` 安全网未做**：它只支持同线程窗口间转发，桌宠的跨进程穿透由 `WS_EX_LAYERED | WS_EX_TRANSPARENT` 控制，径向菜单用 `SetWindowRgn` 排除按钮以外的区域。窗口使用 `SetWindowSubclass` 保留必要样式并处理 `WM_MOUSEACTIVATE`，其余消息交回 winit。
+2. **渲染在主线程**：规格建议 main/render/io 三线程；实现是「事件循环里 `WaitUntil(1/fps)` 节流 + 同线程渲染」，命中是 CPU 计算不阻塞 GPU 提交，实测 60fps 稳定。要拆线程时 `FrameSnapshot` 已经是不可变快照，接口不用改。
+3. **像素模式、i18n 完整化、点击动作配置的导入/导出 UI** 未做（规格标明像素模式 v0 不做 UI；i18n 目前是中/英两套硬编码字符串）。
+4. **`live2d_active_profile`（自定义命名的 profile 保存/选择）** 只支持内置 7 套预设展开；自定义 profile 的数据结构（`click_motion_profiles`）已进配置契约，UI 未提供保存入口。
 
 ## 复现方式
 
@@ -165,12 +164,12 @@ $env:BANDORI_PET_ROOT = "$PWD\run"; $env:RUST_LOG = "info,pet_app=debug"
 
 设置进程改用 `run_event_loop_until_quit` 隐藏常驻，只在收到 `OPEN_SETTINGS` 时显示；关闭设置窗口仅隐藏并发送 `SETTINGS_CLOSED`，后续可从托盘或径向菜单重新打开。连接建立前的打开请求暂存，连接后发送，保留首次启动及缺少模型时的角色选择引导。
 
-收到 `QUIT` 后隐藏设置、径向菜单和气泡，退出 Slint 事件循环，IPC 客户端停止重连。主进程在退出回调中保存配置、发送 `QUIT` 并回收设置子进程；超过 1 秒仍未退出则终止，避免未连接或失去响应的设置进程残留。
+收到 `QUIT` 后隐藏设置和径向菜单，退出 Slint 事件循环，IPC 客户端停止重连。主进程在退出回调中保存配置、发送 `QUIT` 并回收设置子进程；超过 1 秒仍未退出则终止，避免未连接或失去响应的设置进程残留。
 
 验证：
 
 * `cargo test --workspace`：131 passed、0 failed、4 ignored。
-* `cargo test -p pet-app --test ui_lifecycle -- --ignored --nocapture`：真实 Windows 设置进程验证启动及配置快照均不弹窗，关闭后继续运行并可重开，设置、径向菜单及气泡同时显示时收到 `QUIT` 后正常退出。
+* `cargo test -p pet-app --test ui_lifecycle -- --ignored --nocapture`：真实 Windows 设置进程验证启动及配置快照均不弹窗，关闭后继续运行并可重开，设置和径向菜单同时显示时收到 `QUIT` 后正常退出。
 * `settings_open_request_survives_a_delayed_ui_connection`：打开请求早于 IPC 连接时，连接后收到最新请求；连接后的新请求也正常送达。
 * release 双进程联调：已有 anon 模型配置时设置保持隐藏；无配置且无模型时自动打开设置；两种场景主进程正常退出后均无设置进程残留。启动后立即退出、UI 尚未连接时，1 秒兜底终止也通过验证。
 

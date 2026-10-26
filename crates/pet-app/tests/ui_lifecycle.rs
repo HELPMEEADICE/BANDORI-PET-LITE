@@ -121,7 +121,7 @@ fn assert_buttons_are_painted(hwnd: HWND) {
 }
 
 #[test]
-#[ignore = "opens native settings, radial menu and bubble windows"]
+#[ignore = "opens native settings and radial menu windows"]
 fn ui_starts_hidden_reopens_after_close_and_exits_with_all_windows_visible() {
     let root = std::env::temp_dir().join(format!("bandori-ui-lifecycle-{}", std::process::id()));
     std::fs::create_dir_all(root.join("models")).unwrap();
@@ -197,14 +197,8 @@ fn ui_starts_hidden_reopens_after_close_and_exits_with_all_windows_visible() {
         items: pet_ipc::MenuItem::lite_items("zh_CN"),
         locked: false,
     });
-    host.send(&Message::Bubble {
-        x: 800,
-        y: 400,
-        text: "退出回归".into(),
-        duration_ms: 60_000,
-    });
-    wait_until("all UI windows are visible after reopening", || {
-        visible_windows(pid).len() == 3
+    wait_until("both UI windows are visible after reopening", || {
+        visible_windows(pid).len() == 2
     });
     host.send(&Message::Quit);
     wait_until("UI exits on Quit", || {

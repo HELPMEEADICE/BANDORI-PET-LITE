@@ -128,17 +128,6 @@ pub enum Message {
         /// New document.
         config: serde_json::Value,
     },
-    /// pet → ui: show the poke bubble above the pet for ~2 s.
-    Bubble {
-        /// Screen x of the bubble anchor (physical pixels).
-        x: i32,
-        /// Screen y of the bubble anchor (physical pixels).
-        y: i32,
-        /// Bubble text.
-        text: String,
-        /// Lifetime in milliseconds.
-        duration_ms: u32,
-    },
     /// pet → ui: non-fatal problem for the InfoBar.
     Error {
         /// Short category.

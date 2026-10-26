@@ -10,11 +10,8 @@
 //! * [`idle`] — 5 s ambient tick, 180 s cooldown, morning/sleep/late-night/daze
 //!   buckets, random-motion selection.
 //! * [`window_motion`] — the six emotion displacements with OutCubic keyframes.
-//! * [`poke`] — double-click feedback (motion + expression + shake + bubble).
-
 pub mod head_track;
 pub mod idle;
-pub mod poke;
 pub mod window_motion;
 
 use pet_config::{ClickAction, ClickProfile, ClickRegion};
@@ -24,7 +21,6 @@ use tracing::trace;
 
 pub use head_track::{GazeTarget, HeadTracker};
 pub use idle::{AmbientKind, IdlePlanner};
-pub use poke::PokeState;
 pub use window_motion::{WindowMotionKind, WindowMotionPlayer};
 
 /// An action the pet process should perform.
@@ -40,8 +36,6 @@ pub enum Command {
     SetDrag(f32, f32),
     /// Move the window to `(x, y)` in physical pixels (emotion displacement).
     MoveWindow(i32, i32),
-    /// Show a short bubble above the head.
-    Bubble(String),
 }
 
 /// Everything the behavior machine needs to know this tick.
@@ -88,10 +82,6 @@ pub struct RoleBehaviorConfig {
     pub emotion_enabled: bool,
     /// Seven-region click mapping.
     pub click_actions: ClickProfile,
-    /// Poke motion (empty = follow the head region).
-    pub poke_motion: String,
-    /// Poke expression (empty = follow the head region).
-    pub poke_expression: String,
     /// Default motion group (empty = model default idle).
     pub default_motion: String,
     /// Default expression (empty = none).
@@ -108,8 +98,6 @@ impl From<&pet_config::Config> for RoleBehaviorConfig {
             random_actions: config.live2d_random_actions_enabled,
             emotion_enabled: config.emotion_behavior_enabled,
             click_actions: config.click_motion_actions.clone(),
-            poke_motion: config.poke_motion.clone(),
-            poke_expression: config.poke_expression.clone(),
             default_motion: config
                 .active_entry()
                 .map(|entry| entry.default_motion.clone())
@@ -137,7 +125,6 @@ pub struct RoleBehavior {
     head: HeadTracker,
     idle: IdlePlanner,
     window_motion: WindowMotionPlayer,
-    poke: PokeState,
     timers: FeedbackTimers,
     last_interaction: f64,
     started: bool,
@@ -153,7 +140,6 @@ impl RoleBehavior {
             head: HeadTracker::default(),
             idle: IdlePlanner::default(),
             window_motion: WindowMotionPlayer::default(),
-            poke: PokeState::default(),
             timers: FeedbackTimers::default(),
             last_interaction: 0.0,
             started: false,
@@ -253,81 +239,6 @@ impl RoleBehavior {
         commands
     }
 
-    /// Handles a double click (poke).
-    pub fn on_double_click(
-        &mut self,
-        region: ClickRegion,
-        now: f64,
-        ctx: &BehaviorContext<'_>,
-    ) -> Vec<Command> {
-        self.note_interaction(now);
-        let mut commands = Vec::new();
-
-        let motion = if !self.config.poke_motion.is_empty() {
-            self.config.poke_motion.clone()
-        } else {
-            self.head_region_motion(region, ctx)
-        };
-        if !motion.is_empty() {
-            commands.push(Command::PlayMotion(motion));
-        }
-
-        let expression = if !self.config.poke_expression.is_empty() {
-            self.config.poke_expression.clone()
-        } else {
-            self.config
-                .click_actions
-                .get(ClickRegion::Head.key())
-                .map(|action| action.expression.clone())
-                .unwrap_or_default()
-        };
-        if !expression.is_empty() {
-            commands.push(Command::PlayExpression(expression));
-            self.timers.revert_expression_at = Some(now + 5.0);
-        }
-
-        if self.config.emotion_enabled {
-            self.window_motion.start(
-                WindowMotionKind::Shake,
-                PokeState::DOUBLE_CLICK_SHAKE,
-                now,
-                (0.0, -1.0),
-            );
-        }
-        self.poke.show_bubble(now);
-        commands.push(Command::Bubble(localized_poke_text()));
-        commands
-    }
-
-    fn head_region_motion(&self, region: ClickRegion, ctx: &BehaviorContext<'_>) -> String {
-        let action = self
-            .config
-            .click_actions
-            .get(region.key())
-            .cloned()
-            .unwrap_or_else(ClickAction::auto);
-        let motion = match action.motion.as_str() {
-            ClickAction::NONE | ClickAction::AUTO => choose_auto_motion(
-                ClickRegion::Head,
-                ctx.motion_names,
-                ctx.character,
-                &mut Rng::seeded(1),
-            ),
-            ClickAction::RANDOM => String::new(),
-            other => other.to_owned(),
-        };
-        if motion.is_empty() {
-            choose_auto_motion(
-                ClickRegion::Head,
-                ctx.motion_names,
-                ctx.character,
-                &mut Rng::seeded(2),
-            )
-        } else {
-            motion
-        }
-    }
-
     /// Per-frame tick: head tracking, ambient motions, window displacement.
     pub fn tick(&mut self, ctx: &BehaviorContext<'_>, base_position: (i32, i32)) -> Vec<Command> {
         let mut commands = Vec::new();
@@ -395,11 +306,6 @@ impl RoleBehavior {
             }
         }
 
-        // 5. Bubble expiry.
-        if self.poke.bubble_expired(ctx.now) {
-            trace!("poke bubble expired");
-        }
-
         commands
     }
 
@@ -448,11 +354,6 @@ impl RoleBehavior {
     pub fn idle_seconds(&self, now: f64) -> f64 {
         (now - self.last_interaction).max(0.0)
     }
-}
-
-/// Poke bubble text (zh_CN copy from the original client).
-pub fn localized_poke_text() -> String {
-    "戳了你一下".to_owned()
 }
 
 /// Resolves a stored click action's motion against the current model (settings preview).
@@ -521,20 +422,6 @@ mod tests {
         behavior.set_config(config);
         let commands = behavior.on_click(ClickRegion::Head, 1.0, &ctx(1.0, &motions, &expressions));
         assert!(commands.is_empty(), "{commands:?}");
-    }
-
-    #[test]
-    fn double_click_pokes_with_shake_and_bubble() {
-        let motions = vec!["smile01".to_owned()];
-        let expressions = vec!["f01".to_owned()];
-        let mut behavior = RoleBehavior::new(9);
-        behavior.set_config(RoleBehaviorConfig {
-            emotion_enabled: true,
-            ..RoleBehaviorConfig::default()
-        });
-        let commands = behavior.on_double_click(ClickRegion::Head, 2.0, &ctx(2.0, &motions, &expressions));
-        assert!(commands.contains(&Command::Bubble("戳了你一下".to_owned())));
-        assert!(behavior.window_motion_active());
     }
 
     #[test]

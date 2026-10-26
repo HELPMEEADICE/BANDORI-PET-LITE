@@ -54,11 +54,6 @@ struct DragState {
     total: (f32, f32),
 }
 
-struct LastClick {
-    at: Instant,
-    position: (f32, f32),
-}
-
 /// One role window and everything it owns.
 pub struct Role {
     /// The winit window.
@@ -95,10 +90,6 @@ pub struct Role {
     pub click_through: bool,
     /// Last passthrough poll timestamp.
     last_passthrough_poll: Instant,
-    /// Last click, for manual double-click detection.
-    last_click: Option<LastClick>,
-    /// Bubble text and its expiry.
-    bubble: Option<(String, Instant)>,
     /// Last time the model was advanced.
     last_update: Instant,
     /// Window hidden by the user (tray / radial menu).
@@ -269,8 +260,6 @@ impl Role {
             stability: HitStability::default(),
             click_through: false,
             last_passthrough_poll: Instant::now(),
-            last_click: None,
-            bubble: None,
             last_update: Instant::now(),
             hidden: false,
             hide_live2d_model: config.hide_live2d_model,
@@ -494,16 +483,7 @@ impl Role {
         self.behavior.on_click(region, context.now, context)
     }
 
-    /// Handles a double click (poke), returning the emitted commands.
-    pub fn on_double_click(
-        &mut self,
-        region: pet_config::ClickRegion,
-        context: &BehaviorContext<'_>,
-    ) -> Vec<Command> {
-        self.behavior.on_double_click(region, context.now, context)
-    }
-
-    /// Applies a command produced outside `tick` (click/poke feedback).
+    /// Applies a command produced outside `tick` (click feedback).
     pub fn apply_external_command(&mut self, command: &Command) {
         self.apply_command(command);
     }
@@ -641,25 +621,6 @@ impl Role {
         }
     }
 
-    /// Detects a double click from two presses close in time and space.
-    pub fn register_click(&mut self, cursor: (f32, f32)) -> bool {
-        let now = Instant::now();
-        let double = self.last_click.as_ref().is_some_and(|last| {
-            let dx = cursor.0 - last.position.0;
-            let dy = cursor.1 - last.position.1;
-            now.duration_since(last.at).as_millis() < 420 && dx * dx + dy * dy <= 64.0
-        });
-        self.last_click = if double {
-            None
-        } else {
-            Some(LastClick {
-                at: now,
-                position: cursor,
-            })
-        };
-        double
-    }
-
     /// Runs one behavior tick and applies its commands.
     pub fn tick_behavior(
         &mut self,
@@ -698,16 +659,6 @@ impl Role {
             self.apply_command(command);
         }
         commands
-    }
-
-    /// Screen position above the model's head, used to anchor the poke bubble.
-    pub fn bubble_anchor(&self) -> (i32, i32) {
-        match self.window_rect() {
-            Some((x, y, width, height)) => {
-                (x + width as i32 / 2, y + (height as f32 * 0.18) as i32)
-            }
-            None => (0, 0),
-        }
     }
 
     fn apply_command(&mut self, command: &Command) {
@@ -753,17 +704,7 @@ impl Role {
                     self.set_position(*x, *y);
                 }
             }
-            Command::Bubble(text) => {
-                self.bubble = Some((text.clone(), Instant::now()));
-            }
         }
-    }
-
-    /// Current bubble text, if it is still visible.
-    pub fn bubble_text(&self) -> Option<&str> {
-        self.bubble
-            .as_ref()
-            .and_then(|(text, at)| (at.elapsed().as_millis() < 1980).then_some(text.as_str()))
     }
 
     /// Should the window be click-through right now?

@@ -46,8 +46,8 @@ pub fn apply_level_for(key: &str) -> ApplyLevel {
         "fps" | "opacity" | "drag_locked" | "live2d_head_tracking_enabled"
         | "live2d_mutual_gaze_enabled" | "live2d_idle_actions_enabled"
         | "live2d_random_actions_enabled" | "click_motion_actions" | "click_motion_profiles"
-        | "click_motion_active_profile" | "model_action_settings" | "poke_motion"
-        | "poke_expression" | "emotion_behavior_enabled" | "game_topmost" | "hide_live2d_model"
+        | "click_motion_active_profile" | "model_action_settings"
+        | "emotion_behavior_enabled" | "game_topmost" | "hide_live2d_model"
         | "dark_theme" | "language" | "move_all_roles_together" | "auto_start"
         | "live2d_hit_alpha_threshold" | "model_picker_state" => ApplyLevel::Instant,
 
