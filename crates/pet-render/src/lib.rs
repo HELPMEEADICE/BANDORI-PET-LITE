@@ -1,0 +1,937 @@
+//! wgpu rendering for the desktop pet window (spec §2.3).
+//!
+//! Frame order follows the Neocari viewer example: a mask pass into a small
+//! offscreen atlas, then the main pass with `LoadOp::Clear(alpha = 0)`. Neocari's
+//! shader outputs premultiplied alpha and its `Normal` blend state is
+//! `One/OneMinusSrcAlpha`, which matches `CompositeAlphaMode::PreMultiplied` on a
+//! transparent surface.
+//!
+//! The model always renders into an intermediate texture that is then blitted to
+//! the swapchain. That single extra pass buys three things at once:
+//!
+//! * the "省电" quality tier (0.75× render resolution),
+//! * window opacity without `WS_EX_LAYERED` colour-key hacks,
+//! * a place to pre-multiply if a machine only offers `PostMultiplied` surfaces.
+
+use std::sync::Arc;
+
+use neocari::assets::DecodedTexture;
+use neocari::core::Matrix44;
+use neocari::moc3::Moc3DrawableMesh;
+use neocari::render::wgpu::{
+    WgpuClippingPlan, WgpuClippingResources, WgpuLive2dRenderer, WgpuMaskRenderTarget,
+    WgpuMeshBuffers, WgpuTexture, WgpuTransform, preferred_surface_format,
+};
+use tracing::{info, warn};
+use winit::dpi::PhysicalSize;
+use winit::window::Window;
+
+/// Size of the clipping mask atlas (matches the Neocari example).
+pub const MASK_TEXTURE_SIZE: u32 = 256;
+/// Frames rendered before the circuit breaker trips (spec §2.3).
+pub const FAILURE_FUSE: u32 = 3;
+
+/// Rendering errors that must not kill the process.
+#[derive(Debug, thiserror::Error)]
+pub enum RenderError {
+    /// No suitable GPU adapter.
+    #[error("no suitable GPU adapter: {0}")]
+    Adapter(String),
+    /// Device creation failed.
+    #[error("failed to create device: {0}")]
+    Device(String),
+    /// The surface cannot present.
+    #[error("surface unsupported by adapter")]
+    UnsupportedSurface,
+    /// Surface texture acquisition failed.
+    #[error("failed to acquire surface texture: {0}")]
+    Acquire(String),
+    /// Neocari draw call failed.
+    #[error("draw failed: {0}")]
+    Draw(String),
+    /// Mesh upload failed.
+    #[error("mesh upload failed")]
+    MeshUpload,
+    /// Clipping resources failed.
+    #[error("clipping setup failed: {0}")]
+    Clipping(String),
+    /// Texture upload failed.
+    #[error("texture upload failed: {0}")]
+    Texture(String),
+}
+
+/// Shared GPU device, queue and Live2D pipelines.
+pub struct Gpu {
+    /// wgpu instance.
+    pub instance: wgpu::Instance,
+    /// Chosen adapter.
+    pub adapter: wgpu::Adapter,
+    /// Logical device.
+    pub device: wgpu::Device,
+    /// Queue.
+    pub queue: wgpu::Queue,
+    /// Adapter description for the About page.
+    pub adapter_info: wgpu::AdapterInfo,
+}
+
+impl Gpu {
+    /// Creates a device. `allow_hardware` mirrors `gpu_acceleration`.
+    pub fn new(allow_hardware: bool, compatible_surface: Option<&wgpu::Surface<'static>>) -> Result<Self, RenderError> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        Self::new_from(instance, allow_hardware, compatible_surface)
+    }
+
+    /// Creates a device on an existing instance (so the surface stays valid).
+    pub fn new_from(
+        instance: wgpu::Instance,
+        allow_hardware: bool,
+        compatible_surface: Option<&wgpu::Surface<'static>>,
+    ) -> Result<Self, RenderError> {
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: if allow_hardware {
+                wgpu::PowerPreference::HighPerformance
+            } else {
+                wgpu::PowerPreference::LowPower
+            },
+            force_fallback_adapter: !allow_hardware,
+            compatible_surface,
+            apply_limit_buckets: false,
+        }))
+        .map_err(|error| RenderError::Adapter(error.to_string()))?;
+
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("bandori-pet.device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+            ..Default::default()
+        }))
+        .map_err(|error| RenderError::Device(error.to_string()))?;
+
+        let adapter_info = adapter.get_info();
+        info!(
+            adapter = %adapter_info.name,
+            backend = ?adapter_info.backend,
+            driver = %adapter_info.driver,
+            "renderer initialised"
+        );
+        Ok(Self {
+            instance,
+            adapter,
+            device,
+            queue,
+            adapter_info,
+        })
+    }
+}
+
+/// The swapchain plus its configuration.
+pub struct Surface {
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    alpha_mode: wgpu::CompositeAlphaMode,
+    vsync: bool,
+    dpr: f64,
+}
+
+impl Surface {
+    /// Creates and configures a surface for `window`.
+    pub fn new(gpu: &Gpu, window: Arc<Window>, vsync: bool) -> Result<Self, RenderError> {
+        let surface = gpu
+            .instance
+            .create_surface(Arc::clone(&window))
+            .map_err(|error| RenderError::Adapter(error.to_string()))?;
+        Self::from_existing(gpu, surface, window, vsync)
+    }
+
+    /// Configures an already-created surface (the one the adapter was probed with).
+    fn from_existing(
+        gpu: &Gpu,
+        surface: wgpu::Surface<'static>,
+        window: Arc<Window>,
+        vsync: bool,
+    ) -> Result<Self, RenderError> {
+        let capabilities = surface.get_capabilities(&gpu.adapter);
+        if capabilities.formats.is_empty() {
+            return Err(RenderError::UnsupportedSurface);
+        }
+        let size = window.inner_size();
+        let mut config = surface
+            .get_default_config(&gpu.adapter, size.width.max(1), size.height.max(1))
+            .ok_or(RenderError::UnsupportedSurface)?;
+        config.format =
+            preferred_surface_format(&capabilities.formats).ok_or(RenderError::UnsupportedSurface)?;
+        let alpha_mode = choose_alpha_mode(&capabilities.alpha_modes);
+        config.alpha_mode = alpha_mode;
+        config.present_mode = choose_present_mode(&capabilities.present_modes, vsync);
+        config.desired_maximum_frame_latency = 3;
+        surface.configure(&gpu.device, &config);
+        info!(
+            format = ?config.format,
+            alpha = ?alpha_mode,
+            present = ?config.present_mode,
+            "surface configured"
+        );
+        Ok(Self {
+            surface,
+            config,
+            alpha_mode,
+            vsync,
+            dpr: window.scale_factor(),
+        })
+    }
+
+    /// Current size in physical pixels.
+    pub fn size(&self) -> (u32, u32) {
+        (self.config.width, self.config.height)
+    }
+
+    /// Current device pixel ratio.
+    pub fn dpr(&self) -> f64 {
+        self.dpr
+    }
+
+    /// Surface format.
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.config.format
+    }
+
+    /// Alpha mode in use.
+    pub fn alpha_mode(&self) -> wgpu::CompositeAlphaMode {
+        self.alpha_mode
+    }
+
+    /// `true` when vsync is requested.
+    pub fn vsync(&self) -> bool {
+        self.vsync
+    }
+
+    /// Resizes the swapchain (no-op for zero sizes).
+    pub fn resize(&mut self, gpu: &Gpu, size: PhysicalSize<u32>, dpr: f64) {
+        self.dpr = dpr;
+        if size.width == 0 || size.height == 0 {
+            return;
+        }
+        if self.config.width == size.width && self.config.height == size.height {
+            return;
+        }
+        self.config.width = size.width;
+        self.config.height = size.height;
+        self.surface.configure(&gpu.device, &self.config);
+    }
+
+    /// Re-applies configuration after a vsync change.
+    pub fn reconfigure(&mut self, gpu: &Gpu, vsync: bool) {
+        self.vsync = vsync;
+        self.config.present_mode = choose_present_mode(
+            &self.surface.get_capabilities(&gpu.adapter).present_modes,
+            vsync,
+        );
+        self.surface.configure(&gpu.device, &self.config);
+    }
+
+    /// Recreates the swapchain after a lost/outdated frame.
+    pub fn recreate(&mut self, gpu: &Gpu) {
+        self.surface.configure(&gpu.device, &self.config);
+    }
+
+    fn acquire(&self) -> Result<wgpu::SurfaceTexture, RenderError> {
+        match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame) => Ok(frame),
+            wgpu::CurrentSurfaceTexture::Suboptimal(frame) => Ok(frame),
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                Err(RenderError::Acquire("timed out".to_owned()))
+            }
+            wgpu::CurrentSurfaceTexture::Outdated => Err(RenderError::Acquire("outdated".to_owned())),
+            wgpu::CurrentSurfaceTexture::Lost => Err(RenderError::Acquire("lost".to_owned())),
+            wgpu::CurrentSurfaceTexture::Validation => {
+                Err(RenderError::Acquire("validation".to_owned()))
+            }
+        }
+    }
+}
+
+fn choose_alpha_mode(modes: &[wgpu::CompositeAlphaMode]) -> wgpu::CompositeAlphaMode {
+    if modes.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
+        wgpu::CompositeAlphaMode::PreMultiplied
+    } else if modes.contains(&wgpu::CompositeAlphaMode::PostMultiplied) {
+        wgpu::CompositeAlphaMode::PostMultiplied
+    } else {
+        wgpu::CompositeAlphaMode::Auto
+    }
+}
+
+fn choose_present_mode(modes: &[wgpu::PresentMode], vsync: bool) -> wgpu::PresentMode {
+    if vsync {
+        if modes.contains(&wgpu::PresentMode::Fifo) {
+            wgpu::PresentMode::Fifo
+        } else {
+            wgpu::PresentMode::AutoVsync
+        }
+    } else if modes.contains(&wgpu::PresentMode::AutoNoVsync) {
+        wgpu::PresentMode::AutoNoVsync
+    } else if modes.contains(&wgpu::PresentMode::Immediate) {
+        wgpu::PresentMode::Immediate
+    } else {
+        wgpu::PresentMode::AutoVsync
+    }
+}
+
+/// GPU state for one loaded model.
+pub struct ModelGpu {
+    mesh_buffers: WgpuMeshBuffers,
+    textures: Vec<WgpuTexture>,
+    clipping: WgpuClippingResources,
+    mask_target: WgpuMaskRenderTarget,
+    transform: WgpuTransform,
+    drawable_count: usize,
+}
+
+impl ModelGpu {
+    /// Uploads meshes and textures and builds the clipping resources.
+    pub fn new(
+        gpu: &Gpu,
+        renderer: &WgpuLive2dRenderer,
+        meshes: &[Moc3DrawableMesh],
+        textures: &[DecodedTexture],
+        matrix: Matrix44,
+    ) -> Result<Self, RenderError> {
+        let mesh_buffers =
+            WgpuMeshBuffers::from_drawables(&gpu.device, meshes).ok_or(RenderError::MeshUpload)?;
+        let mut uploaded = Vec::with_capacity(textures.len());
+        for texture in textures {
+            let uploaded_texture = renderer
+                .create_rgba8_texture(
+                    &gpu.device,
+                    &gpu.queue,
+                    texture.width(),
+                    texture.height(),
+                    texture.rgba(),
+                )
+                .map_err(|error| RenderError::Texture(error.to_string()))?;
+            uploaded.push(uploaded_texture);
+        }
+        let clipping = build_clipping(gpu, renderer, &mesh_buffers)?;
+        let mask_target = renderer
+            .create_mask_render_target(&gpu.device, MASK_TEXTURE_SIZE)
+            .map_err(|error| RenderError::Texture(error.to_string()))?;
+        let transform = renderer.create_transform(&gpu.device, &matrix);
+        let drawable_count = mesh_buffers.drawables().len();
+        Ok(Self {
+            mesh_buffers,
+            textures: uploaded,
+            clipping,
+            mask_target,
+            transform,
+            drawable_count,
+        })
+    }
+
+    /// Re-uploads mesh vertices from a new frame.
+    pub fn update_meshes(
+        &mut self,
+        gpu: &Gpu,
+        renderer: &WgpuLive2dRenderer,
+        meshes: &[Moc3DrawableMesh],
+    ) -> Result<(), RenderError> {
+        match self.mesh_buffers.update_drawables(&gpu.queue, meshes) {
+            Ok(update) => {
+                if update.bounds_changed() || update.visibility_changed() {
+                    self.rebuild_clipping(gpu, renderer)?;
+                }
+                Ok(())
+            }
+            Err(_) => {
+                self.mesh_buffers =
+                    WgpuMeshBuffers::from_drawables(&gpu.device, meshes).ok_or(RenderError::MeshUpload)?;
+                self.drawable_count = self.mesh_buffers.drawables().len();
+                self.rebuild_clipping(gpu, renderer)
+            }
+        }
+    }
+
+    /// Updates the model → clip transform.
+    pub fn set_matrix(&mut self, gpu: &Gpu, renderer: &WgpuLive2dRenderer, matrix: Matrix44) {
+        if !self.transform.update_matrix(&gpu.queue, &matrix) {
+            self.transform = renderer.create_transform(&gpu.device, &matrix);
+        }
+    }
+
+    fn rebuild_clipping(
+        &mut self,
+        gpu: &Gpu,
+        renderer: &WgpuLive2dRenderer,
+    ) -> Result<(), RenderError> {
+        let mut plan = WgpuClippingPlan::from_mesh_buffers(&self.mesh_buffers);
+        plan.prepare_single_texture_masks(&self.mesh_buffers)
+            .map_err(|error| RenderError::Clipping(format!("{error:?}")))?;
+        if !renderer
+            .update_clipping_resources(&gpu.queue, &mut self.clipping, &plan)
+            .map_err(|error| RenderError::Clipping(format!("{error:?}")))?
+        {
+            self.clipping = build_clipping(gpu, renderer, &self.mesh_buffers)?;
+        }
+        Ok(())
+    }
+
+    /// Number of drawables currently uploaded.
+    pub fn drawable_count(&self) -> usize {
+        self.drawable_count
+    }
+
+    /// Number of uploaded textures.
+    pub fn texture_count(&self) -> usize {
+        self.textures.len()
+    }
+}
+
+fn build_clipping(
+    gpu: &Gpu,
+    renderer: &WgpuLive2dRenderer,
+    mesh_buffers: &WgpuMeshBuffers,
+) -> Result<WgpuClippingResources, RenderError> {
+    let mut plan = WgpuClippingPlan::from_mesh_buffers(mesh_buffers);
+    plan.prepare_single_texture_masks(mesh_buffers)
+        .map_err(|error| RenderError::Clipping(format!("{error:?}")))?;
+    renderer
+        .create_clipping_resources(&gpu.device, &plan)
+        .map_err(|error| RenderError::Clipping(format!("{error:?}")))
+}
+
+/// Blit pipeline used for the downscale and opacity pass.
+struct Blit {
+    pipeline: wgpu::RenderPipeline,
+    bind_group_layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    opacity: wgpu::Buffer,
+}
+
+impl Blit {
+    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("bandori-pet.blit"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/blit.wgsl").into()),
+        });
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("bandori-pet.blit.layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("bandori-pet.blit.pipeline_layout"),
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("bandori-pet.blit.pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_blit"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_blit"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("bandori-pet.blit.sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let opacity = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bandori-pet.blit.opacity"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Self {
+            pipeline,
+            bind_group_layout,
+            sampler,
+            opacity,
+        }
+    }
+
+    fn set_opacity(&self, queue: &wgpu::Queue, opacity: f32) {
+        let value = opacity.clamp(0.0, 1.0);
+        queue.write_buffer(
+            &self.opacity,
+            0,
+            bytemuck::cast_slice(&[value, 0.0f32, 0.0, 0.0]),
+        );
+    }
+
+    fn bind_group(&self, device: &wgpu::Device, view: &wgpu::TextureView) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("bandori-pet.blit.bind_group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.opacity.as_entire_binding(),
+                },
+            ],
+        })
+    }
+}
+
+/// A render-resolution-scaled intermediate target.
+struct Intermediate {
+    view: wgpu::TextureView,
+    width: u32,
+    height: u32,
+}
+
+impl Intermediate {
+    fn new(device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("bandori-pet.intermediate"),
+            size: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        Self {
+            view,
+            width: width.max(1),
+            height: height.max(1),
+        }
+    }
+}
+
+/// One role window's renderer: swapchain, blit, intermediate target.
+pub struct SceneRenderer {
+    gpu: Arc<Gpu>,
+    /// Neocari pipelines for this surface's format.
+    renderer: WgpuLive2dRenderer,
+    /// Surface format the pipelines were built for.
+    format: wgpu::TextureFormat,
+    surface: Surface,
+    blit: Blit,
+    intermediate: Intermediate,
+    quality: f32,
+    opacity: f32,
+    consecutive_failures: u32,
+    fused: bool,
+    frames: u64,
+}
+
+impl SceneRenderer {
+    /// Creates the GPU (or shares `gpu`) and configures a surface for `window`.
+    pub fn new(
+        window: Arc<Window>,
+        vsync: bool,
+        quality: f32,
+        opacity: f32,
+        allow_hardware: bool,
+    ) -> Result<Self, RenderError> {
+        // The surface has to exist before the adapter request so the adapter is
+        // guaranteed to be compatible with this window. The very same surface is
+        // then configured: creating a throwaway probe surface and dropping it
+        // leaves dangling `SurfaceId`s inside wgpu.
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let probe_surface = instance
+            .create_surface(Arc::clone(&window))
+            .map_err(|error| RenderError::Adapter(error.to_string()))?;
+        let gpu = Arc::new(Gpu::new_from(instance, allow_hardware, Some(&probe_surface))?);
+        let surface = Surface::from_existing(&gpu, probe_surface, window, vsync)?;
+        let format = surface.format();
+        let renderer = WgpuLive2dRenderer::new(&gpu.device, format);
+        let blit = Blit::new(&gpu.device, surface.format());
+        blit.set_opacity(&gpu.queue, opacity);
+        let (width, height) = surface.size();
+        let intermediate = Intermediate::new(
+            &gpu.device,
+            scale_dim(width, quality),
+            scale_dim(height, quality),
+            surface.format(),
+        );
+        Ok(Self {
+            gpu,
+            renderer,
+            format,
+            surface,
+            blit,
+            intermediate,
+            quality,
+            opacity,
+            consecutive_failures: 0,
+            fused: false,
+            frames: 0,
+        })
+    }
+
+    /// Reuses an existing device for an additional role window.
+    pub fn with_gpu(
+        gpu: Arc<Gpu>,
+        window: Arc<Window>,
+        vsync: bool,
+        quality: f32,
+        opacity: f32,
+    ) -> Result<Self, RenderError> {
+        let surface = Surface::new(&gpu, window, vsync)?;
+        // Pipelines are format specific; every role builds its own for its surface.
+        let format = surface.format();
+        let renderer = WgpuLive2dRenderer::new(&gpu.device, format);
+        let blit = Blit::new(&gpu.device, format);
+        blit.set_opacity(&gpu.queue, opacity);
+        let (width, height) = surface.size();
+        let intermediate = Intermediate::new(
+            &gpu.device,
+            scale_dim(width, quality),
+            scale_dim(height, quality),
+            surface.format(),
+        );
+        Ok(Self {
+            gpu,
+            renderer,
+            format,
+            surface,
+            blit,
+            intermediate,
+            quality,
+            opacity,
+            consecutive_failures: 0,
+            fused: false,
+            frames: 0,
+        })
+    }
+
+    /// The shared device.
+    pub fn gpu(&self) -> &Arc<Gpu> {
+        &self.gpu
+    }
+
+    /// The Live2D pipelines used by this surface.
+    pub fn renderer(&self) -> &WgpuLive2dRenderer {
+        &self.renderer
+    }
+
+    /// GPU info for the About page.
+    pub fn adapter_info(&self) -> &wgpu::AdapterInfo {
+        &self.gpu.adapter_info
+    }
+
+    /// Surface format the model pipelines were built for.
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.format
+    }
+
+    /// Surface size in physical pixels.
+    pub fn size(&self) -> (u32, u32) {
+        self.surface.size()
+    }
+
+    /// Device pixel ratio.
+    pub fn dpr(&self) -> f64 {
+        self.surface.dpr()
+    }
+
+    /// Alpha mode negotiated with the compositor.
+    pub fn alpha_mode(&self) -> wgpu::CompositeAlphaMode {
+        self.surface.alpha_mode()
+    }
+
+    /// `true` when vsync is active.
+    pub fn vsync(&self) -> bool {
+        self.surface.vsync()
+    }
+
+    /// Frames presented since start-up.
+    pub fn frames(&self) -> u64 {
+        self.frames
+    }
+
+    /// `true` when the circuit breaker tripped (rendering stays stopped).
+    pub fn is_fused(&self) -> bool {
+        self.fused
+    }
+
+    /// Current render-resolution scale.
+    pub fn quality(&self) -> f32 {
+        self.quality
+    }
+
+    /// Switches the render-resolution scale.
+    pub fn set_quality(&mut self, quality: f32) {
+        self.quality = quality.clamp(0.25, 1.0);
+        let (width, height) = self.surface.size();
+        self.intermediate = Intermediate::new(
+            &self.gpu.device,
+            scale_dim(width, self.quality),
+            scale_dim(height, self.quality),
+            self.surface.format(),
+        );
+    }
+
+    /// Applies window opacity (multiplied into the blit).
+    pub fn set_opacity(&mut self, opacity: f32) {
+        self.opacity = opacity.clamp(0.0, 1.0);
+        self.blit.set_opacity(&self.gpu.queue, self.opacity);
+    }
+
+    /// Resizes the swapchain and the intermediate target.
+    pub fn resize(&mut self, size: PhysicalSize<u32>, dpr: f64) {
+        self.surface.resize(&self.gpu, size, dpr);
+        let (width, height) = self.surface.size();
+        self.intermediate = Intermediate::new(
+            &self.gpu.device,
+            scale_dim(width, self.quality),
+            scale_dim(height, self.quality),
+            self.surface.format(),
+        );
+    }
+
+    /// Re-applies the vsync preference.
+    pub fn set_vsync(&mut self, vsync: bool) {
+        self.surface.reconfigure(&self.gpu, vsync);
+    }
+
+    /// Uploads a freshly loaded model.
+    pub fn upload_model(
+        &self,
+        meshes: &[Moc3DrawableMesh],
+        textures: &[DecodedTexture],
+        matrix: Matrix44,
+    ) -> Result<ModelGpu, RenderError> {
+        ModelGpu::new(&self.gpu, &self.renderer, meshes, textures, matrix)
+    }
+
+    /// Renders one frame of `model` into the swapchain.
+    pub fn render(&mut self, model: &ModelGpu) -> Result<(), RenderError> {
+        if self.fused {
+            return Ok(());
+        }
+        let result = self.render_inner(model);
+        match &result {
+            Ok(()) => {
+                self.consecutive_failures = 0;
+                self.frames += 1;
+            }
+            Err(error) => {
+                self.consecutive_failures += 1;
+                warn!(%error, failures = self.consecutive_failures, "frame failed");
+                if let RenderError::Acquire(reason) = error {
+                    if reason == "outdated" || reason == "lost" {
+                        self.surface.recreate(&self.gpu);
+                    }
+                }
+                if self.consecutive_failures >= FAILURE_FUSE {
+                    self.fused = true;
+                    warn!("renderer fused after repeated failures");
+                }
+            }
+        }
+        result
+    }
+
+    fn render_inner(&mut self, model: &ModelGpu) -> Result<(), RenderError> {
+        let frame = self.surface.acquire()?;
+        let frame_view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("bandori-pet.encoder"),
+            });
+
+        // Pass 0: clipping masks into the offscreen atlas.
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("bandori-pet.mask_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: model.mask_target.view(),
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            self.renderer
+                .draw_masks_with_textures(
+                    &mut pass,
+                    &model.mesh_buffers,
+                    &model.clipping,
+                    &model.textures,
+                )
+                .map_err(|error| RenderError::Draw(error.to_string()))?;
+        }
+
+        // Pass 1: the model, into the intermediate target.
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("bandori-pet.main_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.intermediate.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            self.renderer
+                .draw_with_textures_clipping_and_transform(
+                    &mut pass,
+                    &model.mesh_buffers,
+                    &model.textures,
+                    &model.clipping,
+                    &model.mask_target,
+                    &model.transform,
+                )
+                .map_err(|error| RenderError::Draw(error.to_string()))?;
+        }
+
+        // Pass 2: blit to the swapchain (scale + opacity).
+        {
+            let bind_group = self.blit.bind_group(&self.gpu.device, &self.intermediate.view);
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("bandori-pet.blit_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &frame_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.blit.pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        self.gpu.queue.submit([encoder.finish()]);
+        self.gpu.queue.present(frame);
+        Ok(())
+    }
+
+    /// Intermediate target size (for the quality indicator).
+    pub fn render_size(&self) -> (u32, u32) {
+        (self.intermediate.width, self.intermediate.height)
+    }
+}
+
+fn scale_dim(value: u32, quality: f32) -> u32 {
+    ((value as f32) * quality).round().max(1.0) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alpha_mode_prefers_premultiplied() {
+        assert_eq!(
+            choose_alpha_mode(&[
+                wgpu::CompositeAlphaMode::Opaque,
+                wgpu::CompositeAlphaMode::PreMultiplied
+            ]),
+            wgpu::CompositeAlphaMode::PreMultiplied
+        );
+        assert_eq!(
+            choose_alpha_mode(&[wgpu::CompositeAlphaMode::PostMultiplied]),
+            wgpu::CompositeAlphaMode::PostMultiplied
+        );
+        assert_eq!(
+            choose_alpha_mode(&[wgpu::CompositeAlphaMode::Opaque]),
+            wgpu::CompositeAlphaMode::Auto
+        );
+    }
+
+    #[test]
+    fn present_mode_follows_vsync() {
+        let modes = [wgpu::PresentMode::Fifo, wgpu::PresentMode::AutoNoVsync];
+        assert_eq!(choose_present_mode(&modes, true), wgpu::PresentMode::Fifo);
+        assert_eq!(
+            choose_present_mode(&modes, false),
+            wgpu::PresentMode::AutoNoVsync
+        );
+    }
+
+    #[test]
+    fn quality_scales_the_render_target() {
+        assert_eq!(scale_dim(800, 0.75), 600);
+        assert_eq!(scale_dim(801, 1.0), 801);
+        assert_eq!(scale_dim(2, 0.25), 1);
+    }
+}
+
+
+
+
+

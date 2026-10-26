@@ -1,0 +1,636 @@
+import { Button, CheckBox, ComboBox, LineEdit, ListView, ScrollView, Slider } from "std-widgets.slint";
+
+export struct CharacterItem {
+    key: string,
+    display: string,
+    band: string,
+    costume-count: int,
+    selected: bool,
+}
+
+export struct RegionRow {
+    region: string,
+    title: string,
+    motion-index: int,
+    expression-index: int,
+}
+
+export struct AboutLine {
+    label: string,
+    value: string,
+}
+
+component TabButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    callback clicked();
+    height: 34px;
+    width: 132px;
+    border-radius: 8px;
+    background: active ? #e4004f : transparent;
+    Text {
+        text: root.text;
+        color: root.active ? #ffffff : #b9bdc7;
+        font-size: 13px;
+        font-weight: active ? 600 : 400;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+export component SettingsWindow inherits Window {
+    title: "BANDORI-PET-LITE 设置";
+    preferred-width: 960px;
+    preferred-height: 680px;
+    min-width: 780px;
+    min-height: 560px;
+    background: #14141a;
+
+    in-out property <int> page: 0;
+    in property <[CharacterItem]> characters;
+    in property <[string]> costume-labels;
+    in property <[string]> costume-ids;
+    in property <[string]> motion-options;
+    in property <[string]> expression-options;
+    in property <[RegionRow]> regions;
+    in property <[AboutLine]> about-lines;
+    in property <[string]> quality-labels: ["省电", "均衡"];
+    in property <[string]> theme-labels: ["浅色", "深色", "跟随系统"];
+    in property <[string]> preset-labels: ["自动选择", "元气开朗", "傲娇", "害羞内向", "冷静理智", "惊讶意外", "随机"];
+
+    in-out property <string> search;
+    in-out property <string> selected-character;
+    in-out property <string> selected-costume;
+    in-out property <string> selected-character-label;
+    in-out property <string> model-info;
+    in-out property <string> status;
+    in-out property <bool> first-run;
+
+    in-out property <int> fps: 120;
+    in-out property <float> window-opacity: 100;
+    in-out property <int> scale: 100;
+    in-out property <int> quality: 1;
+    in-out property <bool> vsync: true;
+    in-out property <bool> gpu: true;
+    in-out property <int> theme: 2;
+
+    in-out property <bool> drag-locked: true;
+    in-out property <bool> head-tracking: true;
+    in-out property <bool> mutual-gaze: false;
+    in-out property <bool> idle-actions: true;
+    in-out property <bool> random-actions: true;
+    in-out property <bool> emotion: true;
+    in-out property <bool> obs: false;
+    in-out property <bool> topmost: false;
+    in-out property <bool> autostart: false;
+    in-out property <int> preset-index: 0;
+    in-out property <string> poke-motion;
+    in-out property <string> poke-expression;
+
+    callback apply-selection(string, string);
+    callback select-character(string);
+    callback patch-number(string, float);
+    callback patch-bool(string, bool);
+    callback patch-string(string, string);
+    callback apply-preset(string);
+    callback edit-region(int, string, string);
+    callback reset-positions();
+    callback open-folder();
+
+    VerticalLayout {
+        padding: 18px;
+        spacing: 14px;
+
+        HorizontalLayout {
+            spacing: 12px;
+            Text {
+                text: "BANDORI-PET-LITE";
+                color: #ffffff;
+                font-size: 18px;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: root.status;
+                color: #8f949e;
+                font-size: 12px;
+                vertical-alignment: center;
+            }
+        }
+
+        if root.first-run : Rectangle {
+            height: 34px;
+            border-radius: 8px;
+            background: #3a2330;
+            Text {
+                x: 12px;
+                text: "还没有可用的模型：请先在「角色与模型」里选择一个角色。";
+                color: #ffd7e4;
+                font-size: 12px;
+                vertical-alignment: center;
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            TabButton { text: "角色与模型"; active: root.page == 0; clicked => { root.page = 0; } }
+            TabButton { text: "显示与性能"; active: root.page == 1; clicked => { root.page = 1; } }
+            TabButton { text: "交互与动作"; active: root.page == 2; clicked => { root.page = 2; } }
+            TabButton { text: "关于"; active: root.page == 3; clicked => { root.page = 3; } }
+            Rectangle { horizontal-stretch: 1; }
+        }
+
+        // ── Page 0: characters & models ────────────────────────────────────────
+        if root.page == 0 : HorizontalLayout {
+            spacing: 14px;
+
+            Rectangle {
+                width: 320px;
+                background: #1d1d24;
+                border-radius: 10px;
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 8px;
+                    Text {
+                        text: "角色";
+                        color: #f2f3f5;
+                        font-size: 13px;
+                        font-weight: 600;
+                    }
+                    LineEdit {
+                        placeholder-text: "搜索角色 / 乐队";
+                        text <=> root.search;
+                        edited(text) => { root.search = text; }
+                    }
+                    ListView {
+                        for character[index] in root.characters : Rectangle {
+                            height: 46px;
+                            border-radius: 8px;
+                            background: character.selected ? #2c2130 : (character-touch.has-hover ? #23232c : transparent);
+                            VerticalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                Text {
+                                    text: character.display;
+                                    color: character.selected ? #ffd7e4 : #e8e9ee;
+                                    font-size: 13px;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: character.band + " · " + character.costume-count + " 套";
+                                    color: #7f848e;
+                                    font-size: 10px;
+                                }
+                            }
+                            character-touch := TouchArea {
+                                clicked => {
+                                    root.selected-character = character.key;
+                                    root.selected-character-label = character.display;
+                                    root.select-character(character.key);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+                background: #1d1d24;
+                border-radius: 10px;
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 8px;
+                    Text {
+                        text: root.selected-character-label + " · 服装";
+                        color: #f2f3f5;
+                        font-size: 13px;
+                        font-weight: 600;
+                    }
+                    ListView {
+                        for label[index] in root.costume-labels : Rectangle {
+                            height: 40px;
+                            border-radius: 8px;
+                            background: root.selected-costume == root.costume-ids[index] ? #2c2130 : (costume-touch.has-hover ? #23232c : transparent);
+                            Text {
+                                x: 10px;
+                                text: label;
+                                color: root.selected-costume == root.costume-ids[index] ? #ffd7e4 : #d6d8de;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                            }
+                            costume-touch := TouchArea {
+                                clicked => { root.selected-costume = root.costume-ids[index]; }
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Button {
+                            text: "应用并切换";
+                            clicked => { root.apply-selection(root.selected-character, root.selected-costume); }
+                        }
+                        Button {
+                            text: "打开模型目录";
+                            clicked => { root.open-folder(); }
+                        }
+                    }
+                    Text {
+                        text: root.model-info;
+                        color: #8f949e;
+                        font-size: 11px;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+
+        // ── Page 1: display & performance ──────────────────────────────────────
+        if root.page == 1 : ScrollView {
+            VerticalLayout {
+                spacing: 12px;
+                Rectangle {
+                    background: #1d1d24;
+                    border-radius: 10px;
+                    height: content.min-height;
+                    content := VerticalLayout {
+                        padding: 14px;
+                        spacing: 12px;
+                        Text { text: "渲染"; color: #f2f3f5; font-size: 13px; font-weight: 600; }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Text { text: "画质档位"; color: #b9bdc7; font-size: 12px; width: 120px; vertical-alignment: center; }
+                            ComboBox {
+                                model: root.quality-labels;
+                                current-index: root.quality;
+                                selected(value) => {
+                                    root.quality = value == "均衡" ? 1 : 0;
+                                    root.patch-string("live2d_quality", value == "均衡" ? "balanced" : "performance");
+                                }
+                                width: 160px;
+                            }
+                            Text {
+                                text: "省电 = 0.75× 渲染分辨率；均衡 = 原生分辨率";
+                                color: #7f848e;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Text { text: "刷新率"; color: #b9bdc7; font-size: 12px; width: 120px; vertical-alignment: center; }
+                            Slider {
+                                minimum: 30;
+                                maximum: 240;
+                                step: 10;
+                                value: root.fps;
+                                changed(value) => { root.fps = round(value); root.patch-number("fps", round(value)); }
+                                horizontal-stretch: 1;
+                            }
+                            Text { text: root.fps + " FPS"; color: #e8e9ee; font-size: 12px; width: 70px; vertical-alignment: center; }
+                        }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Text { text: "模型缩放"; color: #b9bdc7; font-size: 12px; width: 120px; vertical-alignment: center; }
+                            Slider {
+                                minimum: 25;
+                                maximum: 500;
+                                step: 5;
+                                value: root.scale;
+                                changed(value) => { root.scale = round(value); root.patch-number("live2d_scale", round(value)); }
+                                horizontal-stretch: 1;
+                            }
+                            Text { text: root.scale + " %"; color: #e8e9ee; font-size: 12px; width: 70px; vertical-alignment: center; }
+                        }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Text { text: "不透明度"; color: #b9bdc7; font-size: 12px; width: 120px; vertical-alignment: center; }
+                            Slider {
+                                minimum: 20;
+                                maximum: 100;
+                                step: 5;
+                                value: root.window-opacity;
+                                changed(value) => { root.window-opacity = value; root.patch-number("opacity", value / 100.0); }
+                                horizontal-stretch: 1;
+                            }
+                            Text { text: round(root.window-opacity) + " %"; color: #e8e9ee; font-size: 12px; width: 70px; vertical-alignment: center; }
+                        }
+                        HorizontalLayout {
+                            spacing: 18px;
+                            CheckBox {
+                                text: "垂直同步";
+                                checked: root.vsync;
+                                toggled => { root.vsync = !root.vsync; root.patch-bool("vsync", root.vsync); }
+                            }
+                            CheckBox {
+                                text: "GPU 加速（下次启动生效）";
+                                checked: root.gpu;
+                                toggled => { root.gpu = !root.gpu; root.patch-bool("gpu_acceleration", root.gpu); }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Text { text: "主题"; color: #b9bdc7; font-size: 12px; width: 120px; vertical-alignment: center; }
+                            ComboBox {
+                                model: root.theme-labels;
+                                current-index: root.theme;
+                                selected(value) => {
+                                    root.theme = value == "浅色" ? 0 : (value == "深色" ? 1 : 2);
+                                    root.patch-string("dark_theme", value == "浅色" ? "off" : (value == "深色" ? "on" : "system"));
+                                }
+                                width: 160px;
+                            }
+                        }
+                        Button {
+                            text: "重置所有角色位置";
+                            clicked => { root.reset-positions(); }
+                        }
+                    }
+                }
+                Rectangle { height: 1px; background: transparent; }
+            }
+        }
+
+        // ── Page 2: interaction & actions ──────────────────────────────────────
+        if root.page == 2 : ScrollView {
+            VerticalLayout {
+                spacing: 12px;
+                Rectangle {
+                    background: #1d1d24;
+                    border-radius: 10px;
+                    height: behavior-box.min-height;
+                    behavior-box := VerticalLayout {
+                        padding: 14px;
+                        spacing: 8px;
+                        Text { text: "交互"; color: #f2f3f5; font-size: 13px; font-weight: 600; }
+                        CheckBox {
+                            text: "拖拽锁定（开启后无法拖动桌宠）";
+                            checked: root.drag-locked;
+                            toggled => { root.drag-locked = !root.drag-locked; root.patch-bool("drag_locked", root.drag-locked); }
+                        }
+                        CheckBox {
+                            text: "看向鼠标";
+                            checked: root.head-tracking;
+                            toggled => { root.head-tracking = !root.head-tracking; root.patch-bool("live2d_head_tracking_enabled", root.head-tracking); }
+                        }
+                        CheckBox {
+                            text: "角色对视";
+                            checked: root.mutual-gaze;
+                            toggled => { root.mutual-gaze = !root.mutual-gaze; root.patch-bool("live2d_mutual_gaze_enabled", root.mutual-gaze); }
+                        }
+                        CheckBox {
+                            text: "角色待机动作";
+                            checked: root.idle-actions;
+                            toggled => { root.idle-actions = !root.idle-actions; root.patch-bool("live2d_idle_actions_enabled", root.idle-actions); }
+                        }
+                        CheckBox {
+                            text: "启用随机动作";
+                            checked: root.random-actions;
+                            toggled => { root.random-actions = !root.random-actions; root.patch-bool("live2d_random_actions_enabled", root.random-actions); }
+                        }
+                        CheckBox {
+                            text: "本地情绪位移";
+                            checked: root.emotion;
+                            toggled => { root.emotion = !root.emotion; root.patch-bool("emotion_behavior_enabled", root.emotion); }
+                        }
+                        CheckBox {
+                            text: "游戏置顶兼容";
+                            checked: root.topmost;
+                            toggled => { root.topmost = !root.topmost; root.patch-bool("game_topmost", root.topmost); }
+                        }
+                        CheckBox {
+                            text: "OBS 采集兼容";
+                            checked: root.obs;
+                            toggled => { root.obs = !root.obs; root.patch-bool("obs_window_capture_compatible", root.obs); }
+                        }
+                        CheckBox {
+                            text: "开机自启动";
+                            checked: root.autostart;
+                            toggled => { root.autostart = !root.autostart; root.patch-bool("auto_start", root.autostart); }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    background: #1d1d24;
+                    border-radius: 10px;
+                    height: region-box.min-height;
+                    region-box := VerticalLayout {
+                        padding: 14px;
+                        spacing: 8px;
+                        Text { text: "点击动作反馈（7 个身体部位）"; color: #f2f3f5; font-size: 13px; font-weight: 600; }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Text { text: "预设"; color: #b9bdc7; font-size: 12px; width: 120px; vertical-alignment: center; }
+                            ComboBox {
+                                model: root.preset-labels;
+                                current-index: root.preset-index;
+                                selected(value) => {
+                                    root.preset-index = value == "自动选择" ? 0 : (value == "元气开朗" ? 1 : (value == "傲娇" ? 2 : (value == "害羞内向" ? 3 : (value == "冷静理智" ? 4 : (value == "惊讶意外" ? 5 : 6)))));
+                                }
+                                width: 160px;
+                            }
+                            Button {
+                                text: "套用预设";
+                                clicked => {
+                                    root.apply-preset(root.preset-index == 0 ? "auto" : (root.preset-index == 1 ? "genki" : (root.preset-index == 2 ? "tsundere" : (root.preset-index == 3 ? "shy" : (root.preset-index == 4 ? "cool" : (root.preset-index == 5 ? "surprised" : "random"))))));
+                                }
+                            }
+                            Text {
+                                text: "预设会按当前模型解析成具体动作并保存";
+                                color: #7f848e;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
+                        }
+                        for row[index] in root.regions : HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: row.title;
+                                color: #b9bdc7;
+                                font-size: 12px;
+                                width: 150px;
+                                vertical-alignment: center;
+                            }
+                            ComboBox {
+                                model: root.motion-options;
+                                current-index: row.motion-index;
+                                selected(value) => { root.edit-region(index, "motion", value); }
+                                width: 190px;
+                            }
+                            ComboBox {
+                                model: root.expression-options;
+                                current-index: row.expression-index;
+                                selected(value) => { root.edit-region(index, "expression", value); }
+                                width: 190px;
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Text { text: "戳一戳动作"; color: #b9bdc7; font-size: 12px; width: 150px; vertical-alignment: center; }
+                            ComboBox {
+                                model: root.motion-options;
+                                selected(value) => {
+                                    root.poke-motion = value == "自动匹配" ? "" : (value == "随机动作" ? "__random__" : (value == "不触发" ? "__none__" : value));
+                                    root.patch-string("poke_motion", root.poke-motion);
+                                }
+                                width: 190px;
+                            }
+                            Text { text: "戳一戳表情"; color: #b9bdc7; font-size: 12px; width: 90px; vertical-alignment: center; }
+                            ComboBox {
+                                model: root.expression-options;
+                                selected(value) => {
+                                    root.poke-expression = value == "自动匹配" ? "" : (value == "不触发" ? "__none__" : value);
+                                    root.patch-string("poke_expression", root.poke-expression);
+                                }
+                                width: 190px;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Page 3: about ──────────────────────────────────────────────────────
+        if root.page == 3 : ScrollView {
+            VerticalLayout {
+                spacing: 8px;
+                Rectangle {
+                    background: #1d1d24;
+                    border-radius: 10px;
+                    height: about-box.min-height;
+                    about-box := VerticalLayout {
+                        padding: 14px;
+                        spacing: 8px;
+                        Text { text: "关于 BANDORI-PET-LITE"; color: #f2f3f5; font-size: 13px; font-weight: 600; }
+                        for line[index] in root.about-lines : HorizontalLayout {
+                            spacing: 10px;
+                            Text { text: line.label; color: #8f949e; font-size: 12px; width: 110px; }
+                            Text { text: line.value; color: #d6d8de; font-size: 12px; wrap: word-wrap; horizontal-stretch: 1; }
+                        }
+                        Button { text: "打开模型目录"; clicked => { root.open-folder(); } }
+                        Text {
+                            text: "Live2D 运行时：Neocari（GPL-3.0-only）。模型与角色素材版权归 Craft Egg / Bushiroad 所有，本项目仅本地展示，不提供再分发。";
+                            color: #6f747e;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export struct RadialItem {
+    action: string,
+    label: string,
+    glyph: string,
+    angle: float,
+}
+
+export component RadialMenu inherits Window {
+    title: "BANDORI-PET-LITE 菜单";
+    preferred-width: 360px;
+    preferred-height: 360px;
+    background: #1b1b22;
+
+    in-out property <[RadialItem]> items;
+    in-out property <bool> locked: true;
+
+    callback action(string);
+    callback locked-toggled(bool);
+
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: #1b1b22;
+        border-radius: 18px;
+
+        // Four items on a 110 px radius circle starting at 12 o'clock.
+        for item[index] in root.items : Rectangle {
+            width: 88px;
+            height: 88px;
+            border-radius: 44px;
+            x: parent.width / 2 - self.width / 2 + (index == 0 ? 0px : (index == 1 ? 110px : (index == 2 ? 0px : -110px)));
+            y: parent.height / 2 - self.height / 2 + (index == 0 ? -110px : (index == 1 ? 0px : (index == 2 ? 110px : 0px)));
+            background: item-touch.has-hover ? #33333d : #26262f;
+            border-width: 1px;
+            border-color: #3c3c48;
+
+            VerticalLayout {
+                spacing: 2px;
+                padding-top: 12px;
+                Text {
+                    text: item.glyph;
+                    font-size: 22px;
+                    horizontal-alignment: center;
+                    color: #ffffff;
+                }
+                Text {
+                    text: item.label;
+                    font-size: 12px;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                    color: #ffffff;
+                }
+            }
+            item-touch := TouchArea {
+                clicked => { root.action(item.action); }
+            }
+        }
+
+        // Center hub: click to toggle the drag lock.
+        Rectangle {
+            width: 72px;
+            height: 72px;
+            border-radius: 36px;
+            x: parent.width / 2 - self.width / 2;
+            y: parent.height / 2 - self.height / 2;
+            background: hub-touch.has-hover ? #454550 : #33333c;
+            border-width: 2px;
+            border-color: #55555f;
+            Text {
+                text: root.locked ? "🔒" : "🔓";
+                font-size: 20px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                color: #ffffff;
+            }
+            hub-touch := TouchArea {
+                clicked => { root.locked-toggled(!root.locked); }
+            }
+        }
+    }
+}
+
+
+export component PokeBubble inherits Window {
+    title: "bandori-pet-bubble";
+    preferred-width: 220px;
+    preferred-height: 56px;
+    background: transparent;
+
+    in-out property <string> text: "戳了你一下";
+
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-radius: 16px;
+        background: #e4004f;
+        border-width: 1px;
+        border-color: #ffffffcc;
+        Text {
+            text: root.text;
+            color: #ffffff;
+            font-size: 13px;
+            font-weight: 700;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}

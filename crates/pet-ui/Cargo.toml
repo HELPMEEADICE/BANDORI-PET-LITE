@@ -1,0 +1,21 @@
+[package]
+name = "pet-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Slint settings pages and radial menu."
+
+[dependencies]
+pet-config.workspace = true
+pet-ipc.workspace = true
+pet-assets.workspace = true
+slint.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+
+[build-dependencies]
+slint-build.workspace = true
+

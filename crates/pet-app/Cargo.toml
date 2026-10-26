@@ -1,0 +1,51 @@
+[package]
+name = "pet-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "bandori-pet-lite desktop pet process and settings UI host"
+
+[[bin]]
+name = "bandori-pet"
+path = "src/bin/bandori_pet.rs"
+
+[[bin]]
+name = "bandori-ui"
+path = "src/bin/bandori_ui.rs"
+
+
+[dependencies]
+pet-config.workspace = true
+pet-assets.workspace = true
+pet-live2d.workspace = true
+pet-render.workspace = true
+pet-input.workspace = true
+pet-behavior.workspace = true
+pet-window.workspace = true
+pet-ipc.workspace = true
+pet-util.workspace = true
+pet-ui.workspace = true
+neocari.workspace = true
+wgpu.workspace = true
+winit.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+windows.workspace = true
+tray-icon.workspace = true
+muda.workspace = true
+image.workspace = true
+pollster.workspace = true
+
+
+
+
+[dev-dependencies]
+zstd.workspace = true
+tar.workspace = true
+
+

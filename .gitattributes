@@ -1,0 +1,13 @@
+# Normalise line endings: source files in the repo are LF, Windows scripts CRLF.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets that must never be transformed.
+*.png binary
+*.jpg binary
+*.ico binary
+*.zst binary
+*.ttf binary
+*.otf binary
