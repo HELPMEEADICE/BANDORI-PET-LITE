@@ -337,7 +337,7 @@ mod native {
                     window.set_resizable(false);
                     window.set_skip_taskbar(true);
                     window.set_undecorated_shadow(false);
-                    if let Err(error) = pet_window::apply_pet_style(hwnd, false) {
+                    if let Err(error) = pet_window::win32::apply_popup_style(hwnd) {
                         tracing::warn!(%error, "could not configure radial popup");
                     }
                     self.bounds.borrow_mut().take();
@@ -395,6 +395,9 @@ mod native {
                     }
                 }
                 *self.bounds.borrow_mut() = Some(bounds);
+                // Expanding a region can expose pixels without generating a
+                // WM_PAINT (the first frame may have had an empty region).
+                window.request_redraw();
                 if self.hwnd.get() != 0 {
                     pet_window::reassert_topmost(hwnd);
                 }

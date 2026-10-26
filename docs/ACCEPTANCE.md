@@ -187,3 +187,15 @@ $env:BANDORI_PET_ROOT = "$PWD\run"; $env:RUST_LOG = "info,pet_app=debug"
 * `cargo test -p pet-app --test ui_lifecycle -- --ignored --nocapture --test-threads=1`：两个真实 Windows 窗口回归通过。菜单测试在 150% DPI 下验证客户区覆盖整个窗口、没有标题栏和调整大小边框、不夺焦、圆形按钮接收点击、透明点的 `WindowFromPoint` 命中测试进程的下层窗口，连续切锁、外部点击收起、动作派发及多次重新打开均通过。
 * 原生菜单测试分别以 `winit-software` 和默认 `winit-femtovg` 运行通过；记录到展开区域宽度从 0 经 263 / 355 / 421 到 463 物理像素的中间帧。
 * `cargo build --release --bin bandori-pet --bin bandori-ui` 通过，两个程序同步到 `run/`。通过 `BANDORI_UI_TEST_EXE=run/bandori-ui.exe` 对实际 release 程序重跑两个原生窗口回归，均通过。
+
+### 2026-10-27 · 右键菜单不可见但仍能点击
+
+菜单错误复用了模型窗口的 `WS_EX_LAYERED` 样式。Slint 的 WGL/GDI 呈现与模型的透明 wgpu surface 不同；在真实模型进程与 UI 进程同时运行时，菜单的原生命中区域有效，屏幕上却没有按钮。原来的 `IsWindowVisible`、窗口区域和点击回调检查不能发现这一问题。
+
+新增 `apply_popup_style`，保留不激活、工具窗口和去边框处理，移除菜单的 `WS_EX_LAYERED` / `WS_EX_TRANSPARENT`。按钮间穿透仍由 `SetWindowRgn` 提供，模型窗口继续使用原来的分层样式。菜单在动画改变窗口区域后显式请求重绘。
+
+回归增加实际桌面像素检查，覆盖四个按钮及中心锁；另用独立临时目录启动真实的 `bandori-pet` 与 `bandori-ui`，加载本地 hotaru / casual_spring_01，通过模型右键事件连续呼出三次。旧程序在这一场景取到下层模型/桌面像素，修复后灰黑按钮实际呈现。测试使用临时配置和归档硬链接，不修改原安装目录的设置。
+
+验证：`cargo test --workspace` 为 145 passed、0 failed、7 ignored；软件后端的三个原生 UI 回归全部通过，默认 GPU 后端的菜单像素检查和真实双进程右键回归通过。新增窗口样式回归验证 winit 覆盖扩展样式后，菜单仍不携带分层标志，模型窗口仍保留自己的分层和 OBS 行为。
+
+重新构建 release 后，以 `BANDORI_PET_TEST_ROOT=target/release`、`BANDORI_UI_TEST_EXE=target/release/bandori-ui.exe`、`BANDORI_UI_TEST_BACKEND=winit-femtovg` 重跑全部三个原生 UI 回归，3 passed、0 failed；实际 release 程序也同步到 `run/`。

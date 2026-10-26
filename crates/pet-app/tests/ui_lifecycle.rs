@@ -40,7 +40,7 @@ unsafe extern "system" fn collect_windows(hwnd: HWND, param: LPARAM) -> BOOL {
     let state = unsafe { &mut *(param.0 as *mut VisibleWindows) };
     let mut pid = 0;
     unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-    if pid == state.pid && unsafe { IsWindowVisible(hwnd) }.as_bool() {
+    if (state.pid == 0 || pid == state.pid) && unsafe { IsWindowVisible(hwnd) }.as_bool() {
         let mut title = [0u16; 256];
         let len = unsafe { GetWindowTextW(hwnd, &mut title) };
         // The event loop can own untitled system helper windows (e.g. IME).
@@ -69,6 +69,54 @@ fn wait_until(description: &str, mut condition: impl FnMut() -> bool) {
     while !condition() {
         assert!(Instant::now() < deadline, "timed out: {description}");
         std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn assert_buttons_are_painted(hwnd: HWND) {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Dwm::DwmFlush;
+    use windows::Win32::Graphics::Gdi::{GetDC, GetPixel, ReleaseDC};
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+    let mut bounds = RECT::default();
+    unsafe {
+        GetWindowRect(hwnd, &mut bounds).unwrap();
+    }
+    let size = bounds.right - bounds.left;
+    let scale = size as f32 / 360.;
+    let center = size / 2;
+    let offset = (110. * scale).round() as i32;
+    let inset = (30. * scale).round() as i32;
+    unsafe {
+        DwmFlush().unwrap();
+    }
+    let screen = unsafe { GetDC(None) };
+    assert!(!screen.is_invalid());
+    let samples: Vec<_> = [
+        (center, center - offset),
+        (center + offset, center),
+        (center, center + offset),
+        (center - offset, center),
+        (center, center),
+    ]
+    .into_iter()
+    .map(|(x, y)| {
+        let color = unsafe { GetPixel(screen, bounds.left + x + inset, bounds.top + y) }.0;
+        [color & 255, (color >> 8) & 255, (color >> 16) & 255]
+    })
+    .collect();
+    unsafe {
+        ReleaseDC(None, screen);
+    }
+    for rgb in samples {
+        assert!(
+            rgb[0] >= 20
+                && rgb[0] < 100
+                && rgb[1] >= 20
+                && rgb[1] < 100
+                && rgb[2] >= 20
+                && rgb[2] < 120,
+            "popup must paint gray buttons on the desktop, even when its hit region works: {rgb:?}"
+        );
     }
 }
 
@@ -302,6 +350,28 @@ fn radial_popup_is_frameless_passes_gaps_through_animates_and_reopens() {
         model: Default::default(),
         first_run: false,
     });
+    if std::env::var_os("BANDORI_UI_TEST_AFTER_SETTINGS").is_some() {
+        host.send(&Message::OpenSettings {
+            page: SettingsPage::Display,
+        });
+        wait_until("settings opens before the menu", || {
+            visible_windows(pid)
+                .iter()
+                .any(|(_, title)| title == "Bandori 桌宠 LITE - 设置")
+        });
+        std::thread::sleep(Duration::from_millis(300));
+        let settings = visible_windows(pid)
+            .into_iter()
+            .find(|(_, title)| title == "Bandori 桌宠 LITE - 设置")
+            .unwrap()
+            .0;
+        unsafe {
+            PostMessageW(Some(settings), WM_CLOSE, WPARAM(0), LPARAM(0)).unwrap();
+        }
+        wait_until("settings hides before the menu", || {
+            visible_windows(pid).is_empty()
+        });
+    }
     let show = || {
         host.send(&Message::MenuShow {
             x: 600,
@@ -344,6 +414,7 @@ fn radial_popup_is_frameless_passes_gaps_through_animates_and_reopens() {
         "expected an intermediate animation frame: {spans:?}"
     );
     std::thread::sleep(Duration::from_millis(200));
+    assert_buttons_are_painted(menu);
     let style = unsafe { GetWindowLongPtrW(menu, GWL_STYLE) } as u32;
     let extended = unsafe { GetWindowLongPtrW(menu, GWL_EXSTYLE) } as u32;
     assert_eq!(style & WS_THICKFRAME.0, 0);
@@ -363,15 +434,15 @@ fn radial_popup_is_frameless_passes_gaps_through_animates_and_reopens() {
         (client_origin.x, client_origin.y),
         (bounds.left, bounds.top)
     );
-    for flag in [
-        WS_EX_TOOLWINDOW,
-        WS_EX_NOACTIVATE,
-        WS_EX_LAYERED,
-        WS_EX_TOPMOST,
-    ] {
+    for flag in [WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE, WS_EX_TOPMOST] {
         assert_ne!(extended & flag.0, 0);
     }
     assert_eq!(extended & WS_EX_APPWINDOW.0, 0);
+    assert_eq!(
+        extended & WS_EX_LAYERED.0,
+        0,
+        "Slint popup must use its renderer's native presentation path"
+    );
     assert_eq!(
         unsafe { GetForegroundWindow() },
         foreground,
@@ -434,6 +505,7 @@ fn radial_popup_is_frameless_passes_gaps_through_animates_and_reopens() {
     wait_until("popup reopens", || find_menu().is_some());
     std::thread::sleep(Duration::from_millis(250));
     let menu = find_menu().unwrap();
+    assert_buttons_are_painted(menu);
     post_click(menu, center + offset, center);
     wait_until(
         "motion button dispatches its action",
@@ -449,4 +521,139 @@ fn radial_popup_is_frameless_passes_gaps_through_animates_and_reopens() {
     host.send(&Message::Quit);
     wait_until("radial UI exits", || child.0.try_wait().unwrap().is_some());
     println!("native radial popup passed at {scale}x DPI; animation spans: {spans:?}");
+}
+
+#[test]
+#[ignore = "requires a local installation, model and GPU; launches both real executables"]
+fn right_click_model_paints_menu_in_the_real_two_process_runtime() {
+    use std::path::PathBuf;
+    use windows::Win32::UI::HiDpi::{
+        SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{WM_RBUTTONDOWN, WM_RBUTTONUP};
+
+    struct PetChild(Child, PathBuf);
+    impl Drop for PetChild {
+        fn drop(&mut self) {
+            let deadline = Instant::now() + Duration::from_secs(15);
+            while self.0.try_wait().unwrap().is_none() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+            if std::thread::panicking() {
+                for file in std::fs::read_dir(self.1.join("logs"))
+                    .ok()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Result::ok)
+                {
+                    if let Ok(log) = std::fs::read_to_string(file.path()) {
+                        eprintln!(
+                            "test process log:\n{}",
+                            log.lines()
+                                .rev()
+                                .take(30)
+                                .collect::<Vec<_>>()
+                                .into_iter()
+                                .rev()
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        );
+                    }
+                }
+            }
+        }
+    }
+    unsafe {
+        SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
+    let source = PathBuf::from(
+        std::env::var_os("BANDORI_PET_TEST_ROOT").expect("set BANDORI_PET_TEST_ROOT"),
+    );
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("models")).unwrap();
+    let mut config = pet_config::load_config(&source.join("config.json")).config;
+    config.auto_start = false;
+    config.emotion_behavior_enabled = false;
+    for entry in &config.models {
+        let name = format!("{}.zst", entry.character);
+        let target = root.path().join("models").join(&name);
+        if !target.exists() {
+            std::fs::hard_link(source.join("models").join(name), target).unwrap();
+        }
+    }
+    std::fs::hard_link(
+        std::env::var_os("BANDORI_UI_TEST_EXE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| source.join("bandori-ui.exe")),
+        root.path().join("bandori-ui.exe"),
+    )
+    .unwrap();
+    pet_config::save_config(&root.path().join("config.json"), &config).unwrap();
+    let mut child = PetChild(
+        Command::new(source.join("bandori-pet.exe"))
+            .env("BANDORI_PET_ROOT", root.path())
+            .env("BANDORI_PET_EXIT_AFTER_SECS", "15")
+            .env("RUST_LOG", "warn,pet_app::app=info")
+            .env(
+                "SLINT_BACKEND",
+                std::env::var("BANDORI_UI_TEST_BACKEND").unwrap_or_else(|_| "winit".into()),
+            )
+            .spawn()
+            .unwrap(),
+        root.path().to_path_buf(),
+    );
+    let pid = child.0.id();
+    wait_until("real model window appears", || {
+        assert!(
+            child.0.try_wait().unwrap().is_none(),
+            "pet exited before presenting a model"
+        );
+        !visible_windows(pid).is_empty()
+    });
+    let model = visible_windows(pid)[0].0;
+    // Wait for the actual connection, including a cold model-catalog scan.
+    wait_until("real UI connects", || {
+        assert!(
+            child.0.try_wait().unwrap().is_none(),
+            "pet exited before UI connected"
+        );
+        std::fs::read_dir(root.path().join("logs"))
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .any(|file| {
+                std::fs::read_to_string(file.path())
+                    .is_ok_and(|log| log.contains("settings process connected"))
+            })
+    });
+    for _ in 0..3 {
+        unsafe {
+            PostMessageW(
+                Some(model),
+                WM_RBUTTONDOWN,
+                WPARAM(2),
+                LPARAM((100 << 16) | 100),
+            )
+            .unwrap();
+            PostMessageW(
+                Some(model),
+                WM_RBUTTONUP,
+                WPARAM(0),
+                LPARAM((100 << 16) | 100),
+            )
+            .unwrap();
+        }
+        let find_menu = || {
+            visible_windows(0)
+                .into_iter()
+                .find(|(_, title)| title == "BANDORI-PET-LITE 菜单")
+                .map(|(hwnd, _)| hwnd)
+        };
+        wait_until("right-click opens the real menu", || find_menu().is_some());
+        std::thread::sleep(Duration::from_millis(350));
+        assert_buttons_are_painted(find_menu().unwrap());
+    }
 }

@@ -27,6 +27,8 @@ const DWMWCP_DONOTROUND: i32 = 1;
 const DWMWA_COLOR_NONE: u32 = 0xFFFF_FFFE;
 
 const PET_SUBCLASS_ID: usize = 1;
+const OBS_CAPTURE: usize = 1;
+const POPUP_STYLE: usize = 2;
 
 fn pet_ex_style(mut style: u32, obs_capture: bool) -> u32 {
     // DWM supplies visual alpha; LAYERED + TRANSPARENT supplies cross-process
@@ -42,13 +44,24 @@ fn pet_ex_style(mut style: u32, obs_capture: bool) -> u32 {
     style
 }
 
+fn overlay_ex_style(style: u32, flags: usize) -> u32 {
+    let style = pet_ex_style(style, flags & OBS_CAPTURE != 0);
+    if flags & POPUP_STYLE != 0 {
+        // Slint presents through WGL/GDI, not UpdateLayeredWindow. Its shaped
+        // popup already excludes transparent gaps from the native input region.
+        style & !(WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0)
+    } else {
+        style
+    }
+}
+
 unsafe extern "system" fn pet_subclass_proc(
     hwnd: HWND,
     message: u32,
     wparam: WPARAM,
     lparam: LPARAM,
     subclass_id: usize,
-    obs_capture: usize,
+    style_flags: usize,
 ) -> LRESULT {
     match message {
         WM_STYLECHANGING if wparam.0 as i32 == GWL_EXSTYLE.0 => {
@@ -56,7 +69,7 @@ unsafe extern "system" fn pet_subclass_proc(
             // flag changes. Amend its proposed style before Windows applies it;
             // reapplying afterwards leaves a taskbar/focus race.
             if let Some(styles) = unsafe { (lparam.0 as *mut STYLESTRUCT).as_mut() } {
-                styles.styleNew = pet_ex_style(styles.styleNew, obs_capture != 0);
+                styles.styleNew = overlay_ex_style(styles.styleNew, style_flags);
             }
             return LRESULT(0);
         }
@@ -112,18 +125,21 @@ fn set_ex_style(hwnd: HWND, style: isize) {
 /// Must be called on the window's event-loop thread before its first show.
 /// Repeated calls update the existing subclass's OBS setting.
 pub fn apply_pet_style(hwnd: HWND, obs_capture: bool) -> windows::core::Result<()> {
-    unsafe {
-        SetWindowSubclass(
-            hwnd,
-            Some(pet_subclass_proc),
-            PET_SUBCLASS_ID,
-            obs_capture as usize,
-        )
-    }
-    .ok()?;
+    apply_overlay_style(hwnd, obs_capture as usize)
+}
+
+/// Styles a shaped Slint popup without adding the pet surface's layered flag.
+/// Input passthrough is supplied by its native window region.
+pub fn apply_popup_style(hwnd: HWND) -> windows::core::Result<()> {
+    apply_overlay_style(hwnd, POPUP_STYLE)
+}
+
+fn apply_overlay_style(hwnd: HWND, style_flags: usize) -> windows::core::Result<()> {
+    unsafe { SetWindowSubclass(hwnd, Some(pet_subclass_proc), PET_SUBCLASS_ID, style_flags) }
+        .ok()?;
     set_ex_style(
         hwnd,
-        pet_ex_style(ex_style(hwnd) as u32, obs_capture) as isize,
+        overlay_ex_style(ex_style(hwnd) as u32, style_flags) as isize,
     );
 
     if is_windows_11() {
@@ -340,5 +356,34 @@ mod tests {
             let activation = unsafe { SendMessageW(window.0, WM_MOUSEACTIVATE, None, None) };
             assert_eq!(activation.0, MA_NOACTIVATE as isize);
         }
+    }
+
+    #[test]
+    fn shaped_popup_keeps_native_presentation_styles_after_winit_replacement() {
+        let window = TestWindow::new();
+        apply_pet_style(window.0, false).unwrap();
+        apply_popup_style(window.0).unwrap();
+        for proposed in [
+            WS_EX_APPWINDOW.0,
+            WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0 | WS_EX_ACCEPTFILES.0,
+        ] {
+            unsafe {
+                SetWindowLongPtrW(window.0, GWL_EXSTYLE, proposed as isize);
+            }
+            let actual = ex_style(window.0) as u32;
+            assert_ne!(actual & WS_EX_NOACTIVATE.0, 0);
+            assert_ne!(actual & WS_EX_TOOLWINDOW.0, 0);
+            assert_eq!(
+                actual & (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0 | WS_EX_APPWINDOW.0),
+                0
+            );
+            assert_eq!(
+                unsafe { SendMessageW(window.0, WM_MOUSEACTIVATE, None, None) }.0,
+                MA_NOACTIVATE as isize
+            );
+        }
+        // The same guard can still apply the model surface's own style.
+        apply_pet_style(window.0, false).unwrap();
+        assert_ne!(ex_style(window.0) as u32 & WS_EX_LAYERED.0, 0);
     }
 }
