@@ -1,12 +1,12 @@
 # BANDORI-PET-LITE
 
-桌面上站着一个 Live2D 角色：会呼吸、会看向鼠标、点哪动哪、能换装能缩放；右键一个圆盘菜单，托盘一个设置入口，所有参数都在一个四页的设置窗里改。
+桌面上站着一个 Live2D 角色：会呼吸、会看向鼠标、点哪动哪、能换装能缩放；右键一个圆盘菜单，托盘一个设置入口，所有参数都在一个五页的设置窗里改。
 
 实现规格见 `../BANDORI-PET-REV/docs/BANDORI-PET-LITE.md`（下称「规格」）。本仓库是该规格的 Rust 实现：模型解析与绘制全部交给纯 Rust 的 [Neocari](https://github.com/HELPMEEADICE/Neocari)（Cubism 2 `.moc` + Cubism 3/4/5 `.moc3`，内置 wgpu 后端），不引入 LuaJIT、不引入 Cubism Core。
 
 ```
 bandori-pet.exe   常驻：桌宠窗口（每角色一个）、wgpu surface、托盘、config.json 唯一写者
-bandori-ui.exe    常驻隐藏：Slint 设置窗（4 页）+ 径向菜单 + 戳一戳气泡
+bandori-ui.exe    常驻隐藏：Slint 设置窗（5 页）+ 径向菜单 + 戳一戳气泡
 ```
 
 两个进程用命名管道交换 `CONFIG_SNAPSHOT` / `SETTINGS_PATCH` 等消息，见 `crates/pet-ipc`。
@@ -28,7 +28,8 @@ bandori-ui.exe    常驻隐藏：Slint 设置窗（4 页）+ 径向菜单 + 戳�
 | §2.6 7 区判定 + 4 级名称匹配 + 7 套预设 + 标签→表情表 + `""`/`__random__`/`__none__` | 逐条复刻自 Python 原版（含 `thinking` 候选扩展与 `f01` 兜底） | `crates/pet-input/src/{region,matching}.rs`、`crates/pet-config/src/presets.rs` |
 | §2.7 待机/随机/时段/靠近/对视/poke/情绪位移 | 5s tick、180s 冷却、7min 发呆、18min 睡眠、600px 视线上限、6 种窗口位移 | `crates/pet-behavior` |
 | §2.8 多角色：一模型一窗口、共享 GPU、一起拖动、位置 14 字段持久化 | `models[]` → 多 `Role` | `crates/pet-app`、`crates/pet-window/src/placement.rs` |
-| §3 设置窗 4 页 + 生效分级（Instant/ReloadModel/RebuildWindow/RestartApp） | Slint + 补丁路由 | `crates/pet-ui`、`crates/pet-config/src/patch.rs` |
+| §3 设置窗 + 生效分级（Instant/ReloadModel/RebuildWindow/RestartApp） | Slint + 补丁路由；新增模型下载与更新页 | `crates/pet-ui`、`crates/pet-config/src/patch.rs` |
+| 模型下载与更新 | ModelScope 角色包、批量下载/更新、进度与取消、校验后原子替换、列表刷新与已运行角色重载 | `crates/pet-assets/src/download.rs`、`crates/pet-ui/src/downloads.rs` |
 | §3.6 单写者、原子写、校验回落、未知键原样回写、首启动开设置页 | `serde_json::Value` overlay + 临时文件 + `rename` | `crates/pet-config/src/store.rs` |
 | §5 IPC | 命名管道 + 长度前缀 JSON | `crates/pet-ipc` |
 
@@ -70,9 +71,9 @@ cargo test --workspace          # 114 个单元/集成测试
 ## 运行
 
 1. 建一个运行目录，把两个 exe 放进去；
-2. `models/` 放 `kasumi.zst` 等归档（格式：tar.zst，每个服装一个顶层目录，含 `model.json` 或 `*.model3.json`）；
-3. `assets/` 放 `band.json`、`outfit.json`；
-4. 直接运行 `bandori-pet.exe`：首次启动没有 `config.json` 时会自动挑第一个可用角色并写默认配置，同时拉起隐藏的 `bandori-ui.exe`。
+2. 可在 `models/` 放 `kasumi.zst` 等归档（格式：tar.zst，每个服装一个顶层目录，含 `model.json` 或 `*.model3.json`），也可启动后在线下载；
+3. `assets/` 可放 `band.json`、`outfit.json`；缺失时使用内置角色目录；
+4. 直接运行 `bandori-pet.exe`：首次启动扫描本地模型，无可用模型时自动打开设置的「模型下载与更新」页；已有模型时自动挑第一个可用角色并打开角色页。
 
 开发联调脚本（会从已有的 Bandori 资源目录拷贝 3 个归档并生成 `run/`）：
 
@@ -95,9 +96,15 @@ $env:BANDORI_PET_ROOT = "$PWD\run"; .\run\bandori-pet.exe
 
 「导入自定义模型」支持填写 `.zst` 模型归档的完整路径，导入后立即刷新选择列表；同名归档不会被覆盖。
 
+## 模型下载与更新
+
+设置左侧的「模型下载与更新」按乐队列出可下载角色与本地自定义角色，支持按角色名称、key、乐队搜索。点击「下载」安装单个角色包；已安装角色可点击「更新 / 重试」重新下载最新资源。也可使用「下载缺失」或「更新已安装」批量处理，下载逐个执行，提供大小、进度、速度及取消操作；失败后可重新点击对应角色重试。
+
+下载源与 BANDORI-PET-REV 一致，为 ModelScope 的 `HELPMEEADICE/BanG-Dream-Live2D` 数据集。模型先写入临时文件，下载长度和完整 tar.zst 校验通过后才原子替换旧文件；失败或取消会清理临时文件并保留旧包。完成后自动刷新角色/服装目录、立绘和预览缓存，正在使用的角色会重新加载。点击「选择服装」可直接进入该角色的服装列表，无需重启程序。
+
 ## 关键实现说明
 
-**冷启动只做一件事：出画面。** 启动时若 `config.models` 已有角色，就不扫描 `models/*.zst`（模型索引改为设置窗首次需要时惰性扫描），托盘图标也在首帧之后再创建。release 实测 `role ready 1.10s`，首帧可见 1.54s（含建进程开销）。
+**冷启动优先出画面。** 已有配置且 `config.models` 已有角色时，不扫描 `models/*.zst`（模型索引改为设置窗首次需要时惰性扫描）；首次启动或无配置角色时扫描模型，没有可用模型则打开下载页。托盘图标在首帧之后再创建。此前 release 实测 `role ready 1.10s`，首帧可见 1.54s（含建进程开销）。
 
 **只有 pet 写配置。** 设置窗发出 `SETTINGS_PATCH`（键可为点路径，如 `click_motion_actions.head.motion`），pet 反序列化合并后的完整文档 → 校验/夹紧 → 原子写 → 按最高生效级别执行 → 回 `PATCH_APPLIED` + 新快照。未知键（例如老版本写的 LLM 配置）留在 `extras` 原样回写，不会被吞掉。
 

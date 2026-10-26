@@ -78,10 +78,10 @@ impl PetApp {
         let mut config = load.config.clone();
         config.normalize_models();
 
-        // The model index is only needed to pick models in the settings window; if
-        // `config.models` already names a role, skip the scan entirely so the pet
-        // can present its first frame within the cold-start budget (spec §2.9).
-        let catalog = if config.models.is_empty() {
+        // Scan on first run or without configured roles to route setup to the
+        // download page when empty. Existing configured installations keep the
+        // lazy scan so the pet can present its first frame promptly (spec §2.9).
+        let catalog = if load.is_first_run() || config.models.is_empty() {
             Some(Self::scan_catalog(&paths))
         } else {
             None
@@ -141,7 +141,7 @@ impl PetApp {
         if catalog.is_empty() {
             warn!(
                 models = %paths.models().display(),
-                "no models found; the settings window will open on the model page"
+                "no models found; the settings window will open on the downloads page"
             );
         }
         catalog
@@ -203,15 +203,23 @@ impl PetApp {
         }
         if !self.ensure_role_entries() {
             warn!("no model available to display");
-            self.open_settings(SettingsPage::Model);
+            self.open_settings(SettingsPage::Downloads);
             return;
         }
         self.reconcile_roles(event_loop);
         if self.roles.is_empty() {
+            let page = self.model_settings_page();
+            self.open_settings(page);
+        } else if self.load.is_first_run() {
             self.open_settings(SettingsPage::Model);
         }
-        if self.load.is_first_run() {
-            self.open_settings(SettingsPage::Model);
+    }
+
+    fn model_settings_page(&mut self) -> SettingsPage {
+        if self.ensure_catalog().is_empty() {
+            SettingsPage::Downloads
+        } else {
+            SettingsPage::Model
         }
     }
 
@@ -625,7 +633,31 @@ impl PetApp {
             }
             Message::OpenModelFolder => {
                 let folder = self.paths.models();
+                let _ = std::fs::create_dir_all(&folder);
                 let _ = std::process::Command::new("explorer").arg(folder).spawn();
+            }
+            Message::ModelsChanged { characters } => {
+                self.catalog = None;
+                // ModelCache compares archive size/mtime and re-extracts the new
+                // costume. Keep the existing window and placement on updates.
+                for role in &mut self.roles {
+                    if !characters.contains(&role.character) {
+                        continue;
+                    }
+                    let entry = role.entry.clone();
+                    if let Err(error) = role.swap_model(&entry, &self.cache, &self.config) {
+                        self.ipc.send(&Message::Error {
+                            kind: "model".into(),
+                            message: format!(
+                                "模型已更新，但重新加载 {} 失败：{error}",
+                                role.character
+                            ),
+                        });
+                    }
+                }
+                // Configured roles whose packages were missing can now load.
+                self.roles_dirty = true;
+                self.send_snapshot();
             }
             Message::SettingsClosed => {
                 // Nothing to do: the settings window lives in another process.
@@ -1072,13 +1104,47 @@ mod tests {
     use std::sync::mpsc::channel;
 
     #[test]
+    fn missing_or_invalid_models_route_to_downloads_and_installed_models_to_picker() {
+        let root = tempfile::tempdir().unwrap();
+        let session = format!("model-startup-{}", std::process::id());
+        let mut app = PetApp::new_with(Paths::with_root(root.path()), &session, false).unwrap();
+        assert!(app.load.is_first_run());
+        assert!(!app.ensure_role_entries());
+        assert_eq!(app.model_settings_page(), SettingsPage::Downloads);
+
+        std::fs::create_dir_all(root.path().join("models")).unwrap();
+        std::fs::write(root.path().join("models/kasumi.zst"), b"broken model").unwrap();
+        app.handle_ipc_message(Message::ModelsChanged {
+            characters: vec!["kasumi".into()],
+        });
+        assert_eq!(app.model_settings_page(), SettingsPage::Downloads);
+
+        let file = std::fs::File::create(root.path().join("models/kasumi.zst")).unwrap();
+        let encoder = zstd::stream::write::Encoder::new(file, 1).unwrap();
+        let mut tar = tar::Builder::new(encoder);
+        let mut header = tar::Header::new_gnu();
+        header.set_mode(0o644);
+        header.set_size(2);
+        header.set_cksum();
+        tar.append_data(&mut header, "casual/model.json", b"{}".as_slice())
+            .unwrap();
+        tar.into_inner().unwrap().finish().unwrap();
+        app.handle_ipc_message(Message::ModelsChanged {
+            characters: vec!["kasumi".into()],
+        });
+        assert_eq!(app.model_settings_page(), SettingsPage::Model);
+        assert!(app.ensure_role_entries());
+        assert_eq!(app.config.models[0].character, "kasumi");
+    }
+
+    #[test]
     fn settings_open_request_survives_a_delayed_ui_connection() {
         let session = format!("pending-settings-{}", std::process::id());
         let root = std::env::temp_dir().join(&session);
         std::fs::create_dir_all(&root).unwrap();
         let mut app = PetApp::new_with(Paths::with_root(root), &session, false).unwrap();
-        // Startup requests the model page; a later user request wins.
-        app.open_settings(SettingsPage::Model);
+        // Startup requests downloads; a later user request wins.
+        app.open_settings(SettingsPage::Downloads);
         app.open_settings(SettingsPage::Display);
 
         let pipe = pipe_name(&session);

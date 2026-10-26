@@ -17,6 +17,7 @@
 
 pub mod cache;
 pub mod catalog;
+pub mod download;
 pub mod index;
 pub mod virtual_path;
 

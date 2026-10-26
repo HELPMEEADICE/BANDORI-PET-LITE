@@ -24,5 +24,6 @@ thiserror.workspace = true
 slint-build.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 i-slint-backend-testing = { version = "=1.18.1", features = ["renderer-software"] }
 

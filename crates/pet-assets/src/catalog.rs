@@ -70,6 +70,47 @@ pub struct CatalogBand {
     pub characters: Vec<String>,
 }
 
+/// A remotely available model package, including characters not yet installed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelPackage {
+    pub key: String,
+    pub display: String,
+    pub band_display: String,
+}
+
+/// Download catalog in the same band/member order as the character picker.
+/// Bundled metadata also makes this available in a fresh installation.
+pub fn model_packages(assets_dir: &Path) -> Vec<ModelPackage> {
+    let bands = read_bands(&assets_dir.join("band.json"));
+    let mut outfits = read_outfits(&assets_dir.join("outfit.json"));
+    let mut packages = Vec::new();
+    for band in bands {
+        for key in band.characters {
+            if let Some(info) = outfits.remove(&key) {
+                packages.push(ModelPackage {
+                    display: if info.display.is_empty() {
+                        key.clone()
+                    } else {
+                        info.display
+                    },
+                    key,
+                    band_display: band.display.clone(),
+                });
+            }
+        }
+    }
+    packages.extend(outfits.into_iter().map(|(key, info)| ModelPackage {
+        display: if info.display.is_empty() {
+            key.clone()
+        } else {
+            info.display
+        },
+        key,
+        band_display: "其他角色".into(),
+    }));
+    packages
+}
+
 impl Catalog {
     /// Builds a catalog from the scanned index plus the two JSON metadata files.
     pub fn build(assets_dir: &Path, index: &ModelIndex) -> Self {
@@ -332,6 +373,19 @@ fn bundled_outfits() -> BTreeMap<String, OutfitCharacter> {
 mod tests {
     use super::*;
     use crate::index::{ArchiveEntry, ArchiveScan, CostumeEntry};
+
+    #[test]
+    fn download_catalog_includes_uninstalled_characters_and_bundled_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let packages = model_packages(dir.path());
+        assert_eq!(packages.first().unwrap().key, "kasumi");
+        assert!(packages.iter().any(|package| package.key == "anon"));
+        let keys: std::collections::BTreeSet<_> =
+            packages.iter().map(|package| &package.key).collect();
+        assert_eq!(keys.len(), packages.len());
+        assert!(packages.len() >= 40);
+        assert!(Catalog::build(dir.path(), &ModelIndex::default()).is_empty());
+    }
 
     fn index_with(character: &str, costumes: &[(&str, ModelFormat)]) -> ModelIndex {
         let mut index = ModelIndex::default();

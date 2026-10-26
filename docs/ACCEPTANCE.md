@@ -14,7 +14,9 @@
 | 7 | 换角色 ≤1s 热重载，位置缩放保持 | ✅ | 双角色启动日志：kasumi `ms=1025`、anon（moc3，复用同一 GPU）`ms=145`；`swap_model` 不重建窗口，位置取自 `window_placement`。 |
 | 8 | 画质切省电 → 渲染分辨率 0.75× | ✅ | `SceneRenderer::render_size()` 在 0.75× 时返回 `(307,562)`（410×750 的 0.75）；`scale_dim` 单测覆盖 0.75/1.0/0.25。 |
 | 9 | 改 vsync / OBS 兼容后仍透明、仍能穿透 | ✅（OBS 原生窗口回归；vsync 重配未另做联调） | `apply_obs_capture` 更新样式子类回调的 OBS 标志，切换 `WS_EX_TOOLWINDOW ↔ WS_EX_APPWINDOW`，保留 `NOACTIVATE/LAYERED` 并通过 winit 隐藏任务栏按钮。`window_input` 验证切换后穿透仍可开关；vsync 走 `Surface::reconfigure`。 |
-| 10 | 删掉 config.json 启动 → 打开设置角色页 + 横幅，不崩 | ✅ | `LoadOutcome::is_first_run()` → `OPEN_SETTINGS{page:Model}`；UI 的 `first-run` 横幅。集成测试 `model_selection_without_models_reports_first_run`、`load_config` 的 missing/corrupt 单测（坏文件改名 `.corrupt-<ts>.bak`）。 |
+| 10 | 删掉 config.json 启动 → 扫描模型并打开设置 + 横幅，不崩 | ✅ | 无可用模型时发送 `OPEN_SETTINGS{page:Downloads}`，已有模型时发送 `page:Model`；UI 的 `first-run` 横幅给出相应指引。`missing_or_invalid_models_route_to_downloads_and_installed_models_to_picker` 覆盖缺失、损坏和安装后刷新。 |
+
+新增模型下载与更新验证：下载源与 BANDORI-PET-REV 一致；`pet-assets::download` 的本地 HTTP 回归覆盖下载、覆盖更新、404、空响应、长度不符、归档截断、取消及临时文件清理。联网测试 `downloads_public_model_and_discovers_its_costumes` 已实际下载并校验 kasumi 模型包，发现 117 套服装。下载页的 Slint 回归覆盖首次安装目录、乐队/角色搜索、下载回调，以及 1080×620 / 1180×680 / 150% DPI 下的按钮布局；明暗主题截图位于 `run/download-qa/`。
 
 ## 其它硬指标
 

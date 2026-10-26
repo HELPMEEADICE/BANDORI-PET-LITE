@@ -218,7 +218,14 @@ impl ModelCache {
             .map(|stem| stem.to_string_lossy().to_string())
             .ok_or_else(|| CacheError::Path(spec.to_owned()))?;
         let target = self.cache_root.join(&stem).join(&model_path.member);
-        if target.exists() {
+        let (size, mtime_ns) = archive_stamp(&archive)?;
+        let stamp_path = target.with_extension("member-stamp.json");
+        let expected = Stamp {
+            archive_size: size,
+            archive_mtime_ns: mtime_ns,
+            costume: model_path.member.clone(),
+        };
+        if target.exists() && read_stamp(&stamp_path).as_ref() == Some(&expected) {
             return Ok(target);
         }
         self.extract_prefix(&archive, &model_path.member, &self.cache_root.join(&stem))?;
@@ -228,6 +235,7 @@ impl ModelCache {
                 member: model_path.member,
             });
         }
+        write_json(&stamp_path, &expected)?;
         Ok(target)
     }
 
@@ -479,6 +487,23 @@ mod tests {
         }
         builder.into_inner().unwrap().finish().unwrap();
         archive_path
+    }
+
+    #[test]
+    fn extracted_portraits_refresh_after_package_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let models = dir.path().join("models");
+        fs::create_dir_all(&models).unwrap();
+        build_archive(&models, "kasumi", &[("character.png", "old")]);
+        let cache = ModelCache::new(dir.path().join("portraits"), &models);
+        let spec = "models/kasumi.zst::character.png";
+        // extract_member accepts a fully resolved archive path from the picker.
+        let spec = spec.replace("models/kasumi.zst", &models.join("kasumi.zst").to_string_lossy());
+        let portrait = cache.extract_member(&spec).unwrap();
+        assert_eq!(fs::read_to_string(&portrait).unwrap(), "old");
+        build_archive(&models, "kasumi", &[("character.png", "new portrait contents")]);
+        cache.extract_member(&spec).unwrap();
+        assert_eq!(fs::read_to_string(portrait).unwrap(), "new portrait contents");
     }
 
     #[test]

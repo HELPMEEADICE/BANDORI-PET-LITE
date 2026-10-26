@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 mod picker;
 mod preview;
+mod downloads;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
@@ -88,6 +89,11 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
     let picker = picker::Picker::new(Rc::clone(&catalog), paths, Rc::clone(&send))?;
     picker.wire(&window);
     picker.refresh(&window);
+    let downloads = downloads::Downloads::new(
+        paths, &index, Rc::clone(&catalog), Rc::clone(&picker), Rc::clone(&send),
+    )?;
+    downloads.wire(&window);
+    downloads.refresh(&window);
     window.set_about_lines(ModelRc::new(VecModel::from(
         pet_config::about_lines(paths, &Config::default())
             .into_iter()
@@ -452,6 +458,7 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
             .and_then(|guard| guard.as_ref().map(|config| config.character.clone()))
             .unwrap_or_default();
         pump_picker.poll(&window, &current_character);
+        downloads.poll(&window);
         // The settings window requests a snapshot on open.
         if !pump_shared.connected.load(Ordering::Relaxed) {
             let _ = pump_send(&Message::RequestSnapshot);
@@ -479,6 +486,7 @@ fn page_index(page: SettingsPage) -> i32 {
         SettingsPage::Display => 1,
         SettingsPage::Behavior => 2,
         SettingsPage::About => 3,
+        SettingsPage::Downloads => 4,
     }
 }
 
@@ -873,6 +881,7 @@ mod tests {
         assert_eq!(page_index(SettingsPage::Display), 1);
         assert_eq!(page_index(SettingsPage::Behavior), 2);
         assert_eq!(page_index(SettingsPage::About), 3);
+        assert_eq!(page_index(SettingsPage::Downloads), 4);
     }
 
     #[test]

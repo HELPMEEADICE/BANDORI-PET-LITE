@@ -8,7 +8,20 @@ pub(super) fn render(paths: &Paths, virtual_path: &str) -> Result<PathBuf, Strin
     let extracted = cache
         .resolve(virtual_path)
         .map_err(|error| error.to_string())?;
-    let output = extracted.costume_dir.join(".bandori-picker-preview-v1.png");
+    let archive = pet_assets::ModelPath::parse(virtual_path)
+        .map_err(|error| error.to_string())?
+        .archive_path(paths.root());
+    let metadata = std::fs::metadata(archive).map_err(|error| error.to_string())?;
+    let stamp = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let output = extracted.costume_dir.join(format!(
+        ".bandori-picker-preview-v1-{}-{stamp}.png",
+        metadata.len()
+    ));
     if output.exists() {
         return Ok(output);
     }

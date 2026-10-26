@@ -75,6 +75,9 @@ muda = "0.21"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 zstd = "0.14"
 tar = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+tokio = { version = "1", features = ["rt", "time"] }
+tempfile = "3"
 pollster = "1"
 interprocess = "2.4"
 

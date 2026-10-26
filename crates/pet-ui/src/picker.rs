@@ -249,6 +249,31 @@ impl Picker {
         window.set_preview_costume("".into());
     }
 
+    pub fn catalog_changed(&self, window: &SettingsWindow) {
+        self.pictures.borrow_mut().clear();
+        self.requested.borrow_mut().clear();
+        self.close_preview(window);
+        self.refresh(window);
+    }
+
+    pub fn choose_downloaded(&self, window: &SettingsWindow, key: &str) {
+        window.set_page(0);
+        window.set_adding_model(true);
+        window.set_picking_model(true);
+        window.set_search("".into());
+        window.set_character_filter(0);
+        window.set_selected_band(
+            self.catalog.borrow().character(key)
+                .map(|character| character.band_id.as_str()).unwrap_or("").into(),
+        );
+        window.set_costume_search("".into());
+        window.set_costume_filter(0);
+        self.close_preview(window);
+        super::populate_costumes(window, &self.catalog.borrow(), key, None);
+        window.set_picker_stage(2);
+        self.refresh(window);
+    }
+
     fn show_preview(&self, window: &SettingsWindow, id: &str) {
         if window.get_preview_visible() && window.get_preview_costume() == id {
             return;
@@ -598,6 +623,32 @@ mod tests {
             );
         }
         Catalog::build(Path::new("missing-test-assets"), &index)
+    }
+
+    #[test]
+    fn downloaded_character_opens_costumes_and_returns_to_its_own_band() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = SettingsWindow::new().unwrap();
+        let picker = Picker::new(
+            Rc::new(RefCell::new(fixture_catalog())),
+            &Paths::with_root("missing-test-root"),
+            Rc::new(|_| true),
+        ).unwrap();
+        picker.wire(&window);
+        window.set_selected_band("poppin_party".into());
+        window.set_character_filter(2);
+        window.set_costume_filter(2);
+        window.set_costume_search("no-match".into());
+        picker.choose_downloaded(&window, "anon");
+        assert_eq!(window.get_page(), 0);
+        assert!(window.get_adding_model());
+        assert_eq!(window.get_picker_stage(), 2);
+        assert_eq!(window.get_selected_character(), "anon");
+        assert_eq!(window.get_selected_band(), "mygo");
+        assert_eq!(window.get_picker_costumes().row_count(), 2);
+        window.invoke_picker_back();
+        assert_eq!(window.get_picker_stage(), 1);
+        assert_eq!(window.get_picker_rows().row_data(0).unwrap().cards.row_data(0).unwrap().key, "anon");
     }
 
     #[test]

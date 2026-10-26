@@ -45,6 +45,7 @@ pollster.workspace = true
 
 
 [dev-dependencies]
+tempfile.workspace = true
 zstd.workspace = true
 tar.workspace = true
 
