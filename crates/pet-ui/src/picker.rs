@@ -730,7 +730,7 @@ mod tests {
                 if stage == 2 {
                     window.invoke_choose_card("kasumi".into());
                 }
-                i_slint_backend_testing::testing_backend::mock_elapsed_time(30);
+                crate::tests::settle_animations(&window);
                 let snapshot = window.window().take_snapshot().unwrap();
                 let picker = ElementHandle::find_by_element_type_name(&window, "ModelPicker")
                     .next()

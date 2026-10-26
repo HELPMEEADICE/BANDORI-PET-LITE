@@ -14,6 +14,46 @@ export global Colors {
     out property <color> hover: dark ? #343036 : #f5edf1;
 }
 
+// Shared timings keep feedback quick and page entrances calm. No looping animations.
+export global Motion {
+    out property <duration> feedback: 120ms;
+    out property <duration> selection: 160ms;
+    out property <duration> entrance: 220ms;
+}
+
+export component AnimatedContent inherits Rectangle {
+    in property <int> revision;
+    private property <bool> entered: false;
+    min-width: 0px;
+    min-height: 0px;
+    background: transparent;
+    opacity: 0;
+
+    changed revision => { root.entered = false; }
+    // Start after the first frame, then stop the timer for the rest of this view.
+    Timer {
+        interval: 16ms;
+        running: !root.entered;
+        triggered => { root.entered = true; }
+    }
+    content := Rectangle {
+        y: 8px;
+        width: root.width;
+        height: root.height;
+        background: transparent;
+        @children
+    }
+    states [
+        shown when root.entered: {
+            opacity: 1;
+            content.y: 0px;
+            in {
+                animate opacity, content.y { duration: Motion.entrance; easing: ease-out; }
+            }
+        }
+    ]
+}
+
 export component Body inherits Text {
     color: Colors.text;
     font-size: 14px;
@@ -49,10 +89,11 @@ export component ActionButton inherits Rectangle {
     min-width: 64px;
     vertical-stretch: 0;
     border-radius: 5px;
-    background: primary ? (touch.has-hover ? #ff8ab0 : #ff79a3) : (touch.has-hover ? Colors.hover : Colors.card);
+    background: primary ? (touch.pressed ? #f05c8d : (touch.has-hover ? #ff8ab0 : #ff79a3)) : (touch.pressed ? Colors.soft : (touch.has-hover ? Colors.hover : Colors.card));
     border-width: primary ? 0px : 1px;
     border-color: focus.has-focus ? Colors.accent : Colors.border;
     opacity: enabled ? 1 : 0.45;
+    animate background, border-color, opacity { duration: Motion.feedback; easing: ease-out; }
     accessible-role: button;
     accessible-label: text;
     accessible-enabled: enabled;
@@ -60,9 +101,11 @@ export component ActionButton inherits Rectangle {
     Body {
         width: parent.width;
         height: parent.height;
+        y: touch.pressed && root.enabled ? 1px : 0px;
         text: root.text;
         color: root.text-color;
         horizontal-alignment: center;
+        animate y { duration: Motion.feedback; easing: ease-out; }
     }
     focus := FocusScope {
         enabled: root.enabled;
@@ -84,7 +127,9 @@ export component ToggleRow inherits Rectangle {
     in property <bool> checked;
     callback toggled(bool);
     height: hint == "" ? 34px : 53px;
-    background: transparent;
+    border-radius: 6px;
+    background: touch.has-hover ? Colors.hover : transparent;
+    animate background { duration: Motion.feedback; easing: ease-out; }
     accessible-role: checkbox;
     accessible-label: text;
     accessible-checked: checked;
@@ -104,6 +149,7 @@ export component ToggleRow inherits Rectangle {
             border-width: 1px;
             border-color: focus.has-focus ? Colors.accent : (root.checked ? Colors.accent : #999999);
             background: root.checked ? Colors.accent : transparent;
+            animate background, border-color { duration: Motion.selection; easing: ease-out; }
             Rectangle {
                 x: root.checked ? 23px : 4px;
                 y: 4px;
@@ -111,10 +157,14 @@ export component ToggleRow inherits Rectangle {
                 height: 13px;
                 border-radius: 7px;
                 background: root.checked ? #ffffff : #cecece;
-                animate x { duration: 120ms; }
+                animate x, background { duration: Motion.selection; easing: ease-out; }
             }
         }
-        Body { text: root.checked ? "On" : "Off"; width: 24px; font-size: 13px; }
+        Body {
+            text: root.checked ? "On" : "Off"; width: 24px; font-size: 13px;
+            color: root.checked ? Colors.accent : Colors.muted;
+            animate color { duration: Motion.selection; easing: ease-out; }
+        }
     }
     focus := FocusScope {
         key-pressed(event) => {
@@ -122,7 +172,7 @@ export component ToggleRow inherits Rectangle {
             return reject;
         }
     }
-    TouchArea {
+    touch := TouchArea {
         mouse-cursor: pointer;
         clicked => { focus.focus(); root.toggled(!root.checked); }
     }
@@ -136,13 +186,20 @@ export component NavButton inherits Rectangle {
     callback clicked();
     height: 45px;
     border-radius: 10px;
-    background: active ? Colors.soft : (touch.has-hover ? Colors.hover : Colors.panel);
+    background: touch.pressed ? Colors.soft : (active ? Colors.soft : (touch.has-hover ? Colors.hover : Colors.panel));
     border-width: 1px;
     border-color: active || focus.has-focus ? Colors.accent : Colors.border;
+    animate background, border-color { duration: Motion.selection; easing: ease-out; }
     accessible-role: button;
     accessible-label: text;
     accessible-action-default => { root.clicked(); }
-    if active : Rectangle { x: -4px; y: 9px; width: 4px; height: 27px; border-radius: 2px; background: #f00063; }
+    Rectangle {
+        x: -4px; y: (parent.height - self.height) / 2;
+        width: 4px; height: root.active ? 27px : 8px;
+        opacity: root.active ? 1 : 0;
+        border-radius: 2px; background: Colors.accent;
+        animate height, opacity { duration: Motion.selection; easing: ease-out; }
+    }
     Rectangle {
         x: 10px;
         y: (parent.height - self.height) / 2;
@@ -150,7 +207,12 @@ export component NavButton inherits Rectangle {
         height: 29px;
         border-radius: 9px;
         background: root.active ? #f00063 : root.tint.with-alpha(0.18);
-        Image { x: 5px; y: 5px; width: 19px; height: 19px; source: root.icon; image-fit: contain; colorize: root.active ? #ffffff : root.tint; }
+        animate background { duration: Motion.selection; easing: ease-out; }
+        Image {
+            x: 5px; y: 5px; width: 19px; height: 19px; source: root.icon; image-fit: contain;
+            colorize: root.active ? #ffffff : root.tint;
+            animate colorize { duration: Motion.selection; easing: ease-out; }
+        }
     }
     Body { x: 49px; width: parent.width - 59px; height: parent.height; text: root.text; font-weight: root.active ? 700 : 400; }
     focus := FocusScope {

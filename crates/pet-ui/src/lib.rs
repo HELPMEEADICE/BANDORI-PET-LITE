@@ -826,6 +826,14 @@ fn option_index(value: &str, options: &[slint::SharedString]) -> i32 {
 mod tests {
     use super::*;
 
+    pub(super) fn settle_animations(window: &SettingsWindow) {
+        // Paint the initial state, fire entrance timers, then finish transitions.
+        let _ = window.window().take_snapshot().unwrap();
+        i_slint_backend_testing::testing_backend::mock_elapsed_time(20);
+        let _ = window.window().take_snapshot().unwrap();
+        i_slint_backend_testing::testing_backend::mock_elapsed_time(250);
+    }
+
     #[test]
     fn option_lists_put_specials_first() {
         let names = vec!["smile01".to_owned()];
@@ -903,6 +911,7 @@ mod tests {
         let result = removed.clone();
         window.on_remove_model(move |index| result.set(index));
         window.show().unwrap();
+        settle_animations(&window);
         let _ = window.window().take_snapshot().unwrap();
         ElementHandle::find_by_accessible_label(&window, "选择角色：anon")
             .next()
@@ -967,7 +976,7 @@ mod tests {
                 .dispatch_event(slint::platform::WindowEvent::Resized {
                     size: slint::LogicalSize::new(width, height),
                 });
-            i_slint_backend_testing::testing_backend::mock_elapsed_time(20);
+            settle_animations(&window);
             let snapshot = window.window().take_snapshot().unwrap();
             let element = |id: &str| {
                 ElementHandle::find_by_element_id(&window, &format!("SettingsWindow::{id}"))
@@ -1052,7 +1061,7 @@ mod tests {
             ] {
                 window.set_page(page);
                 window.set_theme(theme);
-                i_slint_backend_testing::testing_backend::mock_elapsed_time(20);
+                settle_animations(&window);
                 let snapshot = window.window().take_snapshot().unwrap();
                 image::save_buffer(
                     std::path::Path::new(&output).join(format!("{label}.png")),

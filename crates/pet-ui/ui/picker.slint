@@ -1,5 +1,5 @@
 import { ComboBox, LineEdit, ListView } from "std-widgets.slint";
-import { Colors, Body, Hint, ActionButton } from "components.slint";
+import { Colors, Motion, AnimatedContent, Body, Hint, ActionButton } from "components.slint";
 
 export struct PickerCard { key: string, display: string, count: int, picture: image, has-picture: bool, favorite: bool }
 export struct PickerRow { cards: [PickerCard] }
@@ -12,13 +12,19 @@ export component IconButton inherits Rectangle {
     callback clicked();
     width: 28px; height: 28px;
     border-radius: 14px;
-    background: checked ? Colors.soft : (touch.has-hover ? Colors.hover : Colors.card);
+    background: touch.pressed || checked ? Colors.soft : (touch.has-hover ? Colors.hover : Colors.card);
     border-width: 1px;
     border-color: checked || focus.has-focus ? Colors.accent : (Colors.dark ? #4a4a4a : #d9dde7);
+    animate background, border-color { duration: Motion.feedback; easing: ease-out; }
     accessible-role: button;
     accessible-label: label;
     accessible-action-default => { root.clicked(); }
-    Image { x: 5px; y: 5px; width: 18px; height: 18px; source: root.icon; colorize: root.checked ? Colors.accent : Colors.muted; image-fit: contain; }
+    Image {
+        x: touch.pressed ? 6px : 5px; y: touch.pressed ? 6px : 5px;
+        width: touch.pressed ? 16px : 18px; height: self.width;
+        source: root.icon; colorize: root.checked ? Colors.accent : Colors.muted; image-fit: contain;
+        animate x, y, width, colorize { duration: Motion.feedback; easing: ease-out; }
+    }
     focus := FocusScope {
         key-pressed(event) => {
             if event.text == " " || event.text == "\n" { root.clicked(); return accept; }
@@ -105,93 +111,102 @@ export component ModelPicker inherits Rectangle {
                 clicked => { root.import-model(); }
             }
         }
-        if root.stage != 2 : card-list := ListView {
-            content-width: max(self.visible-width, root.showing-characters ? 684px : 608px);
-            for row in root.rows : Rectangle {
-                height: root.showing-characters ? 374px : 132px;
-                background: transparent;
-                for card[col] in row.cards : Rectangle {
-                    x: root.showing-characters ? col * 234px : 22px + col * (parent.width - 224px) / 2;
-                    y: 6px;
-                    width: root.showing-characters ? 220px : 180px;
-                    height: root.showing-characters ? 360px : 120px;
-                    border-radius: 5px;
-                    background: card-touch.has-hover ? Colors.hover : (Colors.dark ? #272727 : #ffffff);
-                    clip: true;
-                    accessible-role: button;
-                    accessible-label: card.display;
-                    accessible-action-default => { root.choose-card(card.key); }
-                    if !root.showing-characters : VerticalLayout {
-                        padding: 15px; padding-top: 12px; spacing: 4px;
-                        Body { text: card.display; font-weight: 600; height: 22px; }
-                        Hint { text: card.count + "名角色"; color: Colors.dark ? #999999 : #888888; height: 20px; }
-                        Image { source: card.picture; height: 36px; image-fit: contain; }
-                        Rectangle { vertical-stretch: 1; background: transparent; }
-                    }
-                    if root.showing-characters : VerticalLayout {
-                        padding: 16px; padding-top: 20px; padding-bottom: 12px; spacing: 8px;
-                        Rectangle {
-                            height: 264px; background: transparent; clip: true;
-                            Image { width: parent.width; height: parent.height; source: card.picture; image-fit: contain; }
-                            if !card.has-picture : Hint { width: parent.width; height: parent.height; text: "暂无立绘"; horizontal-alignment: center; }
+        if root.stage != 2 : AnimatedContent {
+            revision: root.stage;
+            card-list := ListView {
+                content-width: max(self.visible-width, root.showing-characters ? 684px : 608px);
+                for row in root.rows : Rectangle {
+                    height: root.showing-characters ? 374px : 132px;
+                    background: transparent;
+                    for card[col] in row.cards : Rectangle {
+                        x: root.showing-characters ? col * 234px : 22px + col * (parent.width - 224px) / 2;
+                        y: card-touch.pressed ? 7px : (card-touch.has-hover ? 3px : 6px);
+                        width: root.showing-characters ? 220px : 180px;
+                        height: root.showing-characters ? 360px : 120px;
+                        border-radius: 5px;
+                        background: card-touch.pressed ? Colors.soft : (card-touch.has-hover ? Colors.hover : (Colors.dark ? #272727 : #ffffff));
+                        border-width: 1px;
+                        border-color: card-focus.has-focus ? Colors.accent : (card-touch.has-hover ? Colors.accent.with-alpha(0.45) : transparent);
+                        animate y, background, border-color { duration: Motion.feedback; easing: ease-out; }
+                        clip: true;
+                        accessible-role: button;
+                        accessible-label: card.display;
+                        accessible-action-default => { root.choose-card(card.key); }
+                        if !root.showing-characters : VerticalLayout {
+                            padding: 15px; padding-top: 12px; spacing: 4px;
+                            Body { text: card.display; font-weight: 600; height: 22px; }
+                            Hint { text: card.count + "名角色"; color: Colors.dark ? #999999 : #888888; height: 20px; }
+                            Image { source: card.picture; height: 36px; image-fit: contain; }
+                            Rectangle { vertical-stretch: 1; background: transparent; }
                         }
-                        Body { text: card.display; font-weight: 700; height: 24px; }
-                        Hint { text: card.count + "套服装"; color: Colors.dark ? #999999 : #888888; height: 22px; }
-                    }
-                    card-focus := FocusScope {
-                        key-pressed(event) => {
-                            if event.text == " " || event.text == "\n" { root.choose-card(card.key); return accept; }
-                            return reject;
+                        if root.showing-characters : VerticalLayout {
+                            padding: 16px; padding-top: 20px; padding-bottom: 12px; spacing: 8px;
+                            Rectangle {
+                                height: 264px; background: transparent; clip: true;
+                                Image { width: parent.width; height: parent.height; source: card.picture; image-fit: contain; }
+                                if !card.has-picture : Hint { width: parent.width; height: parent.height; text: "暂无立绘"; horizontal-alignment: center; }
+                            }
+                            Body { text: card.display; font-weight: 700; height: 24px; }
+                            Hint { text: card.count + "套服装"; color: Colors.dark ? #999999 : #888888; height: 22px; }
                         }
-                    }
-                    card-touch := TouchArea { mouse-cursor: pointer; clicked => { card-focus.focus(); root.choose-card(card.key); } }
-                    Rectangle { x: parent.width - 25px; y: 12px; width: 13px; height: 13px; border-radius: 7px; background: #25c76c; border-width: 2px; border-color: #cce9d7; }
-                    if root.showing-characters : IconButton {
-                        x: parent.width - 36px; y: 34px;
-                        icon: @image-url("icons/heart.svg"); checked: card.favorite;
-                        label: "收藏角色 " + card.display;
-                        clicked => { root.favorite-character(card.key); }
+                        card-focus := FocusScope {
+                            key-pressed(event) => {
+                                if event.text == " " || event.text == "\n" { root.choose-card(card.key); return accept; }
+                                return reject;
+                            }
+                        }
+                        card-touch := TouchArea { mouse-cursor: pointer; clicked => { card-focus.focus(); root.choose-card(card.key); } }
+                        Rectangle { x: parent.width - 25px; y: 12px; width: 13px; height: 13px; border-radius: 7px; background: #25c76c; border-width: 2px; border-color: #cce9d7; }
+                        if root.showing-characters : IconButton {
+                            x: parent.width - 36px; y: 34px;
+                            icon: @image-url("icons/heart.svg"); checked: card.favorite;
+                            label: "收藏角色 " + card.display;
+                            clicked => { root.favorite-character(card.key); }
+                        }
                     }
                 }
             }
         }
         if root.stage != 2 && root.rows.length == 0 : Hint { text: "未找到角色，请检查模型目录或搜索条件。"; horizontal-alignment: center; }
-        if root.stage == 2 : costume-list := ListView {
-            content-width: self.visible-width;
-            for costume in root.costumes : Rectangle {
-                height: 46px; background: transparent;
-                Rectangle {
-                    height: 40px; width: parent.width;
-                    border-radius: 6px; border-width: 1px;
-                    border-color: root.selected-costume == costume.id ? Colors.accent : (Colors.dark ? #555555 : #d9dde7);
-                    background: root.selected-costume == costume.id ? Colors.soft : (costume-touch.has-hover ? Colors.hover : (Colors.dark ? #2c2c2c : #ffffff));
-                    Body { x: 16px; width: parent.width - 100px; height: parent.height; text: costume.display; }
-                    accessible-role: button;
-                    accessible-label: "选择服装 " + costume.display;
-                    accessible-action-default => { root.choose-costume(costume.id); }
-                    costume-focus := FocusScope {
-                        key-pressed(event) => {
-                            if event.text == " " || event.text == "\n" { root.choose-costume(costume.id); return accept; }
-                            return reject;
+        if root.stage == 2 : AnimatedContent {
+            costume-list := ListView {
+                content-width: self.visible-width;
+                for costume in root.costumes : Rectangle {
+                    height: 46px; background: transparent;
+                    Rectangle {
+                        height: 40px; width: parent.width;
+                        border-radius: 6px; border-width: 1px;
+                        border-color: root.selected-costume == costume.id || costume-focus.has-focus ? Colors.accent : (Colors.dark ? #555555 : #d9dde7);
+                        background: root.selected-costume == costume.id || costume-touch.pressed ? Colors.soft : (costume-touch.has-hover ? Colors.hover : (Colors.dark ? #2c2c2c : #ffffff));
+                        animate background, border-color { duration: Motion.feedback; easing: ease-out; }
+                        Body { x: 16px; width: parent.width - 100px; height: parent.height; text: costume.display; }
+                        accessible-role: button;
+                        accessible-label: "选择服装 " + costume.display;
+                        accessible-action-default => { root.choose-costume(costume.id); }
+                        costume-focus := FocusScope {
+                            key-pressed(event) => {
+                                if event.text == " " || event.text == "\n" { root.choose-costume(costume.id); return accept; }
+                                return reject;
+                            }
                         }
-                    }
-                    costume-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { costume-focus.focus(); root.choose-costume(costume.id); }
-                        moved => { root.hover-preview(costume.id, self.has-hover && self.pressed == false); }
-                        changed has-hover => { if !self.has-hover { root.hover-preview(costume.id, false); } }
-                    }
-                    IconButton {
-                        x: parent.width - 74px; y: 6px;
-                        icon: @image-url("icons/eye.svg"); label: "预览服装 " + costume.display;
-                        checked: root.preview-costume == costume.id;
-                        clicked => { root.preview(costume.id); }
-                    }
-                    IconButton {
-                        x: parent.width - 38px; y: 6px;
-                        icon: @image-url("icons/heart.svg"); label: "收藏服装 " + costume.display;
-                        checked: costume.favorite;
-                        clicked => { root.favorite-costume(costume.id); }
+                        costume-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { costume-focus.focus(); root.choose-costume(costume.id); }
+                            moved => { root.hover-preview(costume.id, self.has-hover && self.pressed == false); }
+                            changed has-hover => { if !self.has-hover { root.hover-preview(costume.id, false); } }
+                        }
+                        IconButton {
+                            x: parent.width - 74px; y: 6px;
+                            icon: @image-url("icons/eye.svg"); label: "预览服装 " + costume.display;
+                            checked: root.preview-costume == costume.id;
+                            clicked => { root.preview(costume.id); }
+                        }
+                        IconButton {
+                            x: parent.width - 38px; y: 6px;
+                            icon: @image-url("icons/heart.svg"); label: "收藏服装 " + costume.display;
+                            checked: costume.favorite;
+                            clicked => { root.favorite-costume(costume.id); }
+                        }
                     }
                 }
             }
