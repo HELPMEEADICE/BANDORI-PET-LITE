@@ -6,9 +6,7 @@ use std::time::Instant;
 
 use pet_assets::catalog::CatalogCostume;
 use pet_assets::ModelCache;
-use pet_behavior::{
-    BehaviorContext, Command, RoleBehavior, RoleBehaviorConfig, WindowMotionKind,
-};
+use pet_behavior::{BehaviorContext, Command, RoleBehavior, RoleBehaviorConfig, WindowMotionKind};
 use pet_config::{Config, ModelEntry, Placement};
 use pet_input::hit::{FrameSnapshot, HitStability};
 
@@ -114,8 +112,6 @@ pub struct Role {
     pub costume: String,
 }
 
-
-
 impl Role {
     /// Builds a role window for `entry`.
     ///
@@ -148,16 +144,14 @@ impl Role {
         let mut stored = entry.window_placement.clone();
         stored.width = width;
         stored.height = height;
-        let decision = placement::resolve_position(&stored, (width, height), &monitors, primary.as_ref());
+        let decision =
+            placement::resolve_position(&stored, (width, height), &monitors, primary.as_ref());
         let mut stored = stored;
         stored.x = decision.x;
         stored.y = decision.y;
         if let Some(monitor) = decision.monitor.as_ref() {
-            let recorded = placement::record_placement(
-                (decision.x, decision.y, width, height),
-                dpr,
-                monitor,
-            );
+            let recorded =
+                placement::record_placement((decision.x, decision.y, width, height), dpr, monitor);
             stored.relative_x = recorded.relative_x;
             stored.relative_y = recorded.relative_y;
             stored.right_offset = recorded.right_offset;
@@ -181,19 +175,20 @@ impl Role {
             "creating role window"
         );
 
-        let attributes = Window::default_attributes()
-            .with_title(format!("{}-{}", entry.character, entry.costume))
-            .with_window_icon(crate::brand::icon_rgba(48).ok().and_then(|image| {
-                winit::window::Icon::from_rgba(image.into_raw(), 48, 48).ok()
-            }))
-            .with_transparent(true)
-            .with_decorations(false)
-            .with_resizable(false)
-            .with_window_level(WindowLevel::AlwaysOnTop)
-            .with_active(false)
-            .with_visible(false)
-            .with_inner_size(PhysicalSize::new(width, height))
-            .with_position(PhysicalPosition::new(decision.x, decision.y));
+        let attributes =
+            Window::default_attributes()
+                .with_title(format!("{}-{}", entry.character, entry.costume))
+                .with_window_icon(crate::brand::icon_rgba(48).ok().and_then(|image| {
+                    winit::window::Icon::from_rgba(image.into_raw(), 48, 48).ok()
+                }))
+                .with_transparent(true)
+                .with_decorations(false)
+                .with_resizable(false)
+                .with_window_level(WindowLevel::AlwaysOnTop)
+                .with_active(false)
+                .with_visible(false)
+                .with_inner_size(PhysicalSize::new(width, height))
+                .with_position(PhysicalPosition::new(decision.x, decision.y));
         let window = Arc::new(
             event_loop
                 .create_window(attributes)
@@ -235,7 +230,6 @@ impl Role {
             behavior_config.click_actions = actions.clone();
         }
         behavior.set_config(behavior_config);
-
 
         model.set_auto_blink(true);
         model.set_auto_breath(true);
@@ -336,23 +330,29 @@ impl Role {
         if self.renderer.vsync() != config.vsync {
             self.renderer.set_vsync(config.vsync);
         }
-        self.window.set_visible(!config.hide_live2d_model && !self.hidden);
+        self.window
+            .set_visible(!config.hide_live2d_model && !self.hidden);
     }
 
     /// Rebuilds the window for a scale change (RebuildWindow apply level).
     pub fn apply_scale(&mut self, config: &Config, dpr: f64) -> RoleResult<()> {
         let scale = config.effective_scale_percent(dpr);
         let (width, height) = window_size_for_model(self.bounds, scale, dpr);
-        let (x, y, current_width, current_height) = self
-            .window_rect()
-            .unwrap_or((self.base_position.0, self.base_position.1, width, height));
+        let (x, y, current_width, current_height) = self.window_rect().unwrap_or((
+            self.base_position.0,
+            self.base_position.1,
+            width,
+            height,
+        ));
         if current_width == width && current_height == height {
             return Ok(());
         }
         // Keep the bottom-right corner anchored so the pet does not jump off-screen.
         let new_x = x + (current_width as i32 - width as i32);
         let new_y = y + (current_height as i32 - height as i32);
-        let _ = self.window.request_inner_size(PhysicalSize::new(width, height));
+        let _ = self
+            .window
+            .request_inner_size(PhysicalSize::new(width, height));
         self.base_position = (new_x, new_y);
         self.set_position(new_x, new_y);
         let matrix = fit_matrix(self.bounds, 1.0, self.model.flips_y());
@@ -360,6 +360,7 @@ impl Role {
         self.model_gpu
             .set_matrix(self.renderer.gpu(), self.renderer.renderer(), matrix);
         self.renderer.resize(PhysicalSize::new(width, height), dpr);
+        self.record_placement();
         Ok(())
     }
 
@@ -376,15 +377,19 @@ impl Role {
     pub fn set_position(&mut self, x: i32, y: i32) {
         #[cfg(windows)]
         if let Some(hwnd) = win32::hwnd_of(&self.window) {
-            let (_, _, width, height) = self
-                .window_rect()
-                .unwrap_or((x, y, self.window.inner_size().width, self.window.inner_size().height));
+            let (_, _, width, height) = self.window_rect().unwrap_or((
+                x,
+                y,
+                self.window.inner_size().width,
+                self.window.inner_size().height,
+            ));
             win32::set_window_rect(hwnd, x, y, width, height);
             return;
         }
-        let _ = self
-            .window
-            .request_inner_size(PhysicalSize::new(self.window.inner_size().width.max(1), self.window.inner_size().height.max(1)));
+        let _ = self.window.request_inner_size(PhysicalSize::new(
+            self.window.inner_size().width.max(1),
+            self.window.inner_size().height.max(1),
+        ));
     }
 
     /// Records the current window rect into the placement record.
@@ -393,15 +398,36 @@ impl Role {
             return;
         };
         let monitors = placement::monitors();
-        let monitor = placement::monitor_at(&monitors, (x + width as i32 / 2, y + height as i32 / 2));
+        let monitor =
+            placement::monitor_at(&monitors, (x + width as i32 / 2, y + height as i32 / 2));
         let Some(monitor) = monitor else {
             return;
         };
-        let recorded = placement::record_placement((x, y, width, height), self.window.scale_factor(), &monitor);
+        let recorded = placement::record_placement(
+            (x, y, width, height),
+            self.window.scale_factor(),
+            &monitor,
+        );
         self.placement = recorded;
         self.entry.window_placement = self.placement.clone();
         self.entry.sync_placement_mirror();
         self.base_position = (x, y);
+    }
+
+    /// Places a new/reset role in a free part of the current monitor.
+    pub fn place_apart(&mut self, occupied: &[(i32, i32, u32, u32)]) {
+        let Some((x, y, width, height)) = self.window_rect() else {
+            return;
+        };
+        let monitors = placement::monitors();
+        if let Some(monitor) =
+            placement::monitor_at(&monitors, (x + width as i32 / 2, y + height as i32 / 2))
+        {
+            let (x, y) =
+                placement::unoccupied_position((x, y), (width, height), monitor.work, occupied);
+            self.set_position(x, y);
+            self.base_position = (x, y);
+        }
     }
 
     /// Advances the model by `dt` and uploads the resulting meshes.
@@ -410,8 +436,11 @@ impl Role {
             warn!("model update failed");
             return;
         }
-        if let Err(error) = self.model_gpu
-            .update_meshes(self.renderer.gpu(), self.renderer.renderer(), self.model.meshes()) {
+        if let Err(error) = self.model_gpu.update_meshes(
+            self.renderer.gpu(),
+            self.renderer.renderer(),
+            self.model.meshes(),
+        ) {
             warn!(%error, "mesh upload failed");
         }
     }
@@ -499,9 +528,7 @@ impl Role {
         let snapshot = self.snapshot();
         let size = self.window.inner_size();
         let result = snapshot.hit_test(cursor, (size.width, size.height), alpha_threshold);
-        let hit = self
-            .stability
-            .confirm(result.hit, cursor, now_ms);
+        let hit = self.stability.confirm(result.hit, cursor, now_ms);
         if hit {
             self.last_hit_ms = now_ms;
         }
@@ -519,7 +546,10 @@ impl Role {
         let Some(point) = snapshot.cursor_to_model(cursor, (size.width, size.height)) else {
             return pet_config::ClickRegion::UpperBodyCenter;
         };
-        let area = self.model.hit_test_area(point.0, point.1).unwrap_or_default();
+        let area = self
+            .model
+            .hit_test_area(point.0, point.1)
+            .unwrap_or_default();
         // Model space → clip space with the very same matrix the renderer uses.
         let clip_x = self.matrix.transform_x(point.0);
         let clip_y = self.matrix.transform_y(point.1);
@@ -712,9 +742,9 @@ impl Role {
 
     /// Current bubble text, if it is still visible.
     pub fn bubble_text(&self) -> Option<&str> {
-        self.bubble.as_ref().and_then(|(text, at)| {
-            (at.elapsed().as_millis() < 1980).then_some(text.as_str())
-        })
+        self.bubble
+            .as_ref()
+            .and_then(|(text, at)| (at.elapsed().as_millis() < 1980).then_some(text.as_str()))
     }
 
     /// Should the window be click-through right now?
@@ -848,7 +878,9 @@ impl Role {
         let scale = config.effective_scale_percent(dpr);
         let (width, height) = window_size_for_model(bounds, scale, dpr);
         let matrix = fit_matrix(bounds, 1.0, model.flips_y());
-        let model_gpu = self.renderer.upload_model(model.meshes(), &textures, matrix)?;
+        let model_gpu = self
+            .renderer
+            .upload_model(model.meshes(), &textures, matrix)?;
 
         self.model = model;
         self.model_gpu = model_gpu;
@@ -861,13 +893,27 @@ impl Role {
         self.costume = entry.costume.clone();
         self.stability.reset();
 
+        let (x, y, old_width, old_height) = self.window_rect().unwrap_or((
+            self.base_position.0,
+            self.base_position.1,
+            width,
+            height,
+        ));
         let _ = self
             .window
             .request_inner_size(PhysicalSize::new(width, height));
+        self.set_position(
+            x + old_width as i32 - width as i32,
+            y + old_height as i32 - height as i32,
+        );
         self.model.set_auto_blink(true);
         self.model.set_auto_breath(true);
         self.behavior.set_config(RoleBehaviorConfig::from(config));
         self.behavior.start(0.0);
+        self.window
+            .set_title(&format!("{}-{}", self.character, self.costume));
+        self.renderer.resize(PhysicalSize::new(width, height), dpr);
+        self.record_placement();
         info!(character = %entry.character, costume = %entry.costume, "model hot-swapped");
         Ok(())
     }
@@ -915,15 +961,3 @@ pub fn entry_for_selection(character: &str, costume: &CatalogCostume) -> ModelEn
 pub fn is_left(state: ElementState, button: MouseButton) -> bool {
     state == ElementState::Pressed && button == MouseButton::Left
 }
-
-
-
-
-
-
-
-
-
-
-
-

@@ -146,18 +146,34 @@ pub fn resolve_position(
             monitors
                 .iter()
                 .find(|monitor| monitor.geometry == placement.screen_geometry)
+        })
+        .or_else(|| {
+            // Legacy mirrored coordinates have no monitor fingerprint yet.
+            placement
+                .screen_name
+                .is_empty()
+                .then(|| {
+                    monitors
+                        .iter()
+                        .find(|monitor| {
+                            let [x, y, w, h] = monitor.geometry;
+                            placement.x >= x
+                                && placement.x < x + w
+                                && placement.y >= y
+                                && placement.y < y + h
+                        })
+                        .or(primary)
+                })
+                .flatten()
         });
 
     match matching {
         Some(monitor) => {
-            let same_geometry = monitor.geometry == placement.screen_geometry;
+            let same_geometry =
+                placement.screen_name.is_empty() || monitor.geometry == placement.screen_geometry;
             if same_geometry {
                 let work = monitor.work;
-                let x = clamp(
-                    placement.x,
-                    work[0],
-                    work[0] + work[2] - width.min(work[2]),
-                );
+                let x = clamp(placement.x, work[0], work[0] + work[2] - width.min(work[2]));
                 let y = clamp(
                     placement.y,
                     work[1],
@@ -188,17 +204,64 @@ pub fn resolve_position(
                 screen = %placement.screen_name,
                 "stored monitor not found, falling back to primary"
             );
-            default_for(primary.or_else(|| monitors.first()), PositionDecision::Fallback)
+            default_for(
+                primary.or_else(|| monitors.first()),
+                PositionDecision::Fallback,
+            )
         }
     }
 }
 
+/// Finds a position with the least overlap, keeping new roles inside the work
+/// area. Existing windows are left alone; saved positions bypass this helper.
+pub fn unoccupied_position(
+    preferred: (i32, i32),
+    size: (u32, u32),
+    work: [i32; 4],
+    occupied: &[(i32, i32, u32, u32)],
+) -> (i32, i32) {
+    let max_x = work[0] + (work[2] - size.0 as i32).max(0);
+    let max_y = work[1] + (work[3] - size.1 as i32).max(0);
+    let preferred = (
+        preferred.0.clamp(work[0], max_x),
+        preferred.1.clamp(work[1], max_y),
+    );
+    let overlap = |(x, y): (i32, i32)| -> i64 {
+        occupied
+            .iter()
+            .map(|&(ox, oy, width, height)| {
+                let w = ((x as i64 + size.0 as i64).min(ox as i64 + width as i64)
+                    - (x as i64).max(ox as i64))
+                .max(0);
+                let h = ((y as i64 + size.1 as i64).min(oy as i64 + height as i64)
+                    - (y as i64).max(oy as i64))
+                .max(0);
+                w * h
+            })
+            .sum()
+    };
+    let mut best = preferred;
+    let mut best_overlap = overlap(best);
+    if best_overlap == 0 {
+        return best;
+    }
+    for y in (work[1]..=max_y).rev().step_by(48) {
+        for x in (work[0]..=max_x).rev().step_by(48) {
+            let candidate_overlap = overlap((x, y));
+            if candidate_overlap < best_overlap {
+                best = (x, y);
+                best_overlap = candidate_overlap;
+                if best_overlap == 0 {
+                    return best;
+                }
+            }
+        }
+    }
+    best
+}
+
 /// Records the 14 placement fields from the current window rect and monitor.
-pub fn record_placement(
-    rect: (i32, i32, u32, u32),
-    dpr: f64,
-    monitor: &MonitorInfo,
-) -> Placement {
+pub fn record_placement(rect: (i32, i32, u32, u32), dpr: f64, monitor: &MonitorInfo) -> Placement {
     let (x, y, width, height) = rect;
     let work = monitor.work;
     let relative_x = if (work[2] - width as i32).max(1) == 0 {
@@ -269,32 +332,25 @@ pub fn set_auto_start(exe: &Path, enabled: bool) -> std::io::Result<()> {
 }
 
 #[cfg(windows)]
-
-
 #[cfg(windows)]
 mod win32_monitors {
     //! `EnumDisplayMonitors` + `EnumDisplayDevicesW` wrappers.
 
     use super::MonitorInfo;
     use tracing::warn;
-    use windows::core::PCWSTR;
     use windows::core::BOOL;
+    use windows::core::PCWSTR;
     use windows::Win32::Foundation::{LPARAM, RECT};
     use windows::Win32::Graphics::Gdi::{
-        EnumDisplayDevicesW, EnumDisplayMonitors, GetMonitorInfoW, DISPLAY_DEVICEW,
-        HDC, HMONITOR, MONITORINFOEXW,
+        EnumDisplayDevicesW, EnumDisplayMonitors, GetMonitorInfoW, DISPLAY_DEVICEW, HDC, HMONITOR,
+        MONITORINFOEXW,
     };
 
     pub fn enumerate() -> Vec<MonitorInfo> {
         let mut collected: Vec<MonitorInfo> = Vec::new();
         let data = &mut collected as *mut Vec<MonitorInfo>;
         let result = unsafe {
-            EnumDisplayMonitors(
-                None,
-                None,
-                Some(monitor_callback),
-                LPARAM(data as isize),
-            )
+            EnumDisplayMonitors(None, None, Some(monitor_callback), LPARAM(data as isize))
         };
         if !result.as_bool() {
             warn!("EnumDisplayMonitors failed");
@@ -347,14 +403,7 @@ mod win32_monitors {
             .collect();
         let mut device = DISPLAY_DEVICEW::default();
         device.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as u32;
-        let ok = unsafe {
-            EnumDisplayDevicesW(
-                PCWSTR(wide.as_ptr()),
-                0,
-                &mut device,
-                0,
-            )
-        };
+        let ok = unsafe { EnumDisplayDevicesW(PCWSTR(wide.as_ptr()), 0, &mut device, 0) };
         if !ok.as_bool() {
             return (String::new(), String::new(), String::new());
         }
@@ -365,7 +414,10 @@ mod win32_monitors {
     }
 
     fn wide_to_string(buffer: &[u16]) -> String {
-        let end = buffer.iter().position(|unit| *unit == 0).unwrap_or(buffer.len());
+        let end = buffer
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(buffer.len());
         String::from_utf16_lossy(&buffer[..end])
     }
 }
@@ -424,7 +476,10 @@ mod registry {
         if status != ERROR_SUCCESS {
             return false;
         }
-        let end = buffer.iter().position(|unit| *unit == 0).unwrap_or(buffer.len());
+        let end = buffer
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(buffer.len());
         let value = String::from_utf16_lossy(&buffer[..end]);
         value.to_ascii_lowercase().contains(
             &exe.to_string_lossy()
@@ -440,10 +495,7 @@ mod registry {
         };
         let status = if enabled {
             let value = format!("\"{}\"", exe.display());
-            let wide: Vec<u16> = value
-                .encode_utf16()
-                .chain(std::iter::once(0))
-                .collect();
+            let wide: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
             unsafe {
                 RegSetValueExW(
                     key,
@@ -501,6 +553,40 @@ mod tests {
     }
 
     #[test]
+    fn new_roles_find_independent_positions_without_moving_existing_roles() {
+        let work = [0, 0, 1920, 1040];
+        let size = (500, 625);
+        let first = (1392, 414);
+        let mut occupied = vec![(first.0, first.1, size.0, size.1)];
+        for _ in 0..2 {
+            let next = unoccupied_position(first, size, work, &occupied);
+            assert!(next.0 >= 0 && next.0 + 500 <= 1920);
+            assert!(next.1 >= 0 && next.1 + 625 <= 1040);
+            assert!(occupied.iter().all(|&(x, y, width, height)| {
+                next.0 + 500 <= x
+                    || x + width as i32 <= next.0
+                    || next.1 + 625 <= y
+                    || y + height as i32 <= next.1
+            }));
+            occupied.push((next.0, next.1, size.0, size.1));
+        }
+        assert_eq!(occupied[0], (1392, 414, 500, 625));
+    }
+
+    #[test]
+    fn crowded_monitor_keeps_roles_on_screen() {
+        let next = unoccupied_position(
+            (900, 900),
+            (500, 625),
+            [-800, 0, 800, 700],
+            &[(-800, 0, 500, 625)],
+        );
+        assert!((-800..=-500).contains(&next.0));
+        assert!((0..=75).contains(&next.1));
+        assert_ne!(next, (-800, 0));
+    }
+
+    #[test]
     fn same_monitor_reuses_absolute_coordinates() {
         let primary = monitor("primary", [0, 0, 1920, 1080], [0, 0, 1920, 1040]);
         let placement = Placement {
@@ -513,6 +599,19 @@ mod tests {
         let resolved = resolve_position(&placement, (500, 625), &[primary.clone()], Some(&primary));
         assert_eq!(resolved.decision, PositionDecision::Absolute);
         assert_eq!((resolved.x, resolved.y), (100, 200));
+    }
+
+    #[test]
+    fn legacy_coordinates_work_without_a_monitor_fingerprint() {
+        let primary = monitor("primary", [0, 0, 2560, 1440], [0, 0, 2560, 1400]);
+        let placement = Placement {
+            x: 700,
+            y: 250,
+            ..Placement::default()
+        };
+        let resolved = resolve_position(&placement, (500, 625), &[primary.clone()], Some(&primary));
+        assert_eq!((resolved.x, resolved.y), (700, 250));
+        assert_eq!(resolved.decision, PositionDecision::Absolute);
     }
 
     #[test]
@@ -559,4 +658,3 @@ mod tests {
         assert_eq!((resolved.x, resolved.y), (1400, 400));
     }
 }
-

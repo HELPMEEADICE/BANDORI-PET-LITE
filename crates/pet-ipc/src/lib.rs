@@ -7,9 +7,7 @@
 use std::io::{Read, Write};
 use std::sync::Arc;
 
-use interprocess::local_socket::{
-    prelude::*, GenericNamespaced, ListenerOptions, Stream,
-};
+use interprocess::local_socket::{prelude::*, GenericNamespaced, ListenerOptions, Stream};
 use pet_config::SettingsPatch;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
@@ -168,7 +166,7 @@ pub enum Message {
     },
     /// ui → pet: reset every role to the primary screen center.
     ResetPositions,
-    /// ui → pet: switch model of the primary role.
+    /// ui → pet: add a character or change its costume, keeping other roles.
     ModelSelect {
         /// Character key.
         character: String,
@@ -264,10 +262,12 @@ pub struct Server {
 impl Server {
     /// Binds the pipe. A stale pipe from a previous run is replaced.
     pub fn bind(name: &str) -> Result<Self, IpcError> {
-        let ns_name = name.to_ns_name::<GenericNamespaced>().map_err(|error| IpcError::Bind {
-            name: name.to_owned(),
-            source: std::io::Error::other(error.to_string()),
-        })?;
+        let ns_name = name
+            .to_ns_name::<GenericNamespaced>()
+            .map_err(|error| IpcError::Bind {
+                name: name.to_owned(),
+                source: std::io::Error::other(error.to_string()),
+            })?;
         let listener = ListenerOptions::new()
             .name(ns_name)
             .create_sync()
@@ -305,10 +305,12 @@ pub struct Connection {
 impl Connection {
     /// Connects to a running pet process.
     pub fn connect(name: &str) -> Result<Self, IpcError> {
-        let ns_name = name.to_ns_name::<GenericNamespaced>().map_err(|error| IpcError::Bind {
-            name: name.to_owned(),
-            source: std::io::Error::other(error.to_string()),
-        })?;
+        let ns_name = name
+            .to_ns_name::<GenericNamespaced>()
+            .map_err(|error| IpcError::Bind {
+                name: name.to_owned(),
+                source: std::io::Error::other(error.to_string()),
+            })?;
         let stream = Stream::connect(ns_name)?;
         Ok(Self {
             stream: Arc::new(stream),
@@ -384,6 +386,3 @@ mod tests {
         handle.join().unwrap();
     }
 }
-
-
-

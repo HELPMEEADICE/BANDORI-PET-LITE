@@ -89,6 +89,10 @@ $env:BANDORI_PET_ROOT = "$PWD\run"; .\run\bandori-pet.exe
 
 角色可按名称、乐队、key 搜索，服装可按名称、id 搜索；两页均支持最近使用和收藏筛选。服装右侧的眼睛按钮固定/关闭静态预览，按住 Shift 悬停可临时预览。预览在后台离屏生成，不创建桌面窗口。右侧设置通过「应用」保存，收藏与最近使用随配置保存。
 
+右侧「桌面角色」列表可选择当前编辑的角色，再点击「切换角色/服装」单独换装；「添加 Live2D 模型」会立即增加一个共享 GPU 的独立桌面窗口，其他角色保持原位。同一角色只放置一次，选择已有角色的新服装会更新它。点击列表中的 × 移除对应角色，至少保留一个。新角色和「重置位置」会优先寻找屏幕内的空位。
+
+所有设置保存在运行目录的 `config.json`（使用 `BANDORI_PET_ROOT` 时位于该目录），每个角色在 `models[]` 中独立记录角色、服装和窗口位置；当前编辑角色由顶层 `character` / `costume` 记录。拖动结束后约 2 秒自动保存，正常退出时立即保存，重启后恢复各自位置。配置兼容旧版 `window_x` / `window_y` 坐标及带 UTF-8 BOM 的 JSON；模型暂时缺失或加载失败时保留其配置，避免后续保存丢失角色。
+
 「导入自定义模型」支持填写 `.zst` 模型归档的完整路径，导入后立即刷新选择列表；同名归档不会被覆盖。
 
 ## 关键实现说明
@@ -96,6 +100,15 @@ $env:BANDORI_PET_ROOT = "$PWD\run"; .\run\bandori-pet.exe
 **冷启动只做一件事：出画面。** 启动时若 `config.models` 已有角色，就不扫描 `models/*.zst`（模型索引改为设置窗首次需要时惰性扫描），托盘图标也在首帧之后再创建。release 实测 `role ready 1.10s`，首帧可见 1.54s（含建进程开销）。
 
 **只有 pet 写配置。** 设置窗发出 `SETTINGS_PATCH`（键可为点路径，如 `click_motion_actions.head.motion`），pet 反序列化合并后的完整文档 → 校验/夹紧 → 原子写 → 按最高生效级别执行 → 回 `PATCH_APPLIED` + 新快照。未知键（例如老版本写的 LLM 配置）留在 `extras` 原样回写，不会被吞掉。
+
+多角色窗口的可选实测回归（需要本地模型和 GPU，会短暂创建桌面窗口）：
+
+```powershell
+$env:BANDORI_PET_TEST_ROOT = "$PWD\run"
+cargo test -p pet-app --test multi_role_runtime -- --ignored --nocapture
+```
+
+此测试使用独立临时目录，验证 moc / moc3 角色动态添加、错开放置、移除、换装、组合设置更新、缺失模型保留和配置恢复。
 
 **帧序固定**（抄 Neocari `examples/show_model.rs`）：mask pass → main pass（`LoadOp::Clear(alpha=0)`）→ blit 到 swapchain。moc3 的每帧顺序是 `reset_parameters → reset_part_opacities → 覆盖参数（视线/眨眼/呼吸/口型）→ motion tick/apply → expression tick/apply → apply_parameter_overrides → apply_physics → apply_pose → update_meshes`；moc 全部塞在 `Moc2RuntimeModel::update(dt)` 里。
 

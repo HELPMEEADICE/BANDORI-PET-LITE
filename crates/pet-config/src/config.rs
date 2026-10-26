@@ -226,6 +226,9 @@ pub struct ModelEntry {
     pub default_motion: String,
     /// Default expression; empty means "no expression".
     pub default_expression: String,
+    /// Preserve per-role settings written by other versions.
+    #[serde(flatten)]
+    pub extras: Map<String, Value>,
 }
 
 impl Default for ModelEntry {
@@ -244,6 +247,7 @@ impl Default for ModelEntry {
             pixel_window_placement: Value::Object(Map::new()),
             default_motion: String::new(),
             default_expression: String::new(),
+            extras: Map::new(),
         }
     }
 }
@@ -314,7 +318,10 @@ impl ModelPickerState {
 
     /// Toggles a costume favourite and reports the new state.
     pub fn toggle_favorite_costume(&mut self, character: &str, costume: &str) -> bool {
-        toggle(&mut self.favorite_costumes, &format!("{character}:{costume}"))
+        toggle(
+            &mut self.favorite_costumes,
+            &format!("{character}:{costume}"),
+        )
     }
 }
 
@@ -503,17 +510,28 @@ impl Config {
             .unwrap_or_default()
     }
 
-    /// Drops unusable `models[]` entries and back-fills the global
-    /// `character`/`costume` pair from the first surviving entry.
+    /// Keeps one usable entry per character and preserves the selected role.
+    /// Empty legacy lists retain the global pair for catalog resolution.
     pub fn normalize_models(&mut self) {
-        self.models.retain(|entry| entry.is_usable());
-        if let Some(first) = self.models.first().cloned() {
-            if self.character.is_empty() {
-                self.character = first.character.clone();
-            }
-            if self.costume.is_empty() {
-                self.costume = first.costume.clone();
-            }
+        let mut characters = std::collections::HashSet::new();
+        self.models
+            .retain(|entry| entry.is_usable() && characters.insert(entry.character.clone()));
+        if !self.models.is_empty()
+            && !self
+                .models
+                .iter()
+                .any(|entry| entry.character == self.character && entry.costume == self.costume)
+        {
+            self.character = self
+                .models
+                .first()
+                .map(|entry| entry.character.clone())
+                .unwrap_or_default();
+            self.costume = self
+                .models
+                .first()
+                .map(|entry| entry.costume.clone())
+                .unwrap_or_default();
         }
     }
 
@@ -552,7 +570,8 @@ impl Config {
         if self.live2d_scale == bounds::SCALE_UNSET {
             (device_pixel_ratio * 100.0).clamp(25.0, 500.0) as f32
         } else {
-            self.live2d_scale.clamp(bounds::SCALE_MIN, bounds::SCALE_MAX) as f32
+            self.live2d_scale
+                .clamp(bounds::SCALE_MIN, bounds::SCALE_MAX) as f32
         }
     }
 }
@@ -571,7 +590,8 @@ mod tests {
 
     #[test]
     fn unknown_keys_survive_a_round_trip() {
-        let source = r#"{"fps": 90, "future_feature": {"nested": [1, 2, 3]}, "llm_api_key": "secret"}"#;
+        let source =
+            r#"{"fps": 90, "future_feature": {"nested": [1, 2, 3]}, "llm_api_key": "secret"}"#;
         let config: Config = serde_json::from_str(source).expect("parse");
         assert_eq!(config.fps, 90);
         assert!(config.extras.contains_key("future_feature"));
@@ -616,4 +636,3 @@ mod tests {
         assert!((config.effective_scale_percent(1.0) - 500.0).abs() < f32::EPSILON);
     }
 }
-

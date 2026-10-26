@@ -104,7 +104,7 @@ pub fn load_config(path: &Path) -> LoadOutcome {
         }
     };
 
-    match serde_json::from_str::<Config>(&raw) {
+    match serde_json::from_str::<Config>(raw.trim_start_matches('\u{feff}')) {
         Ok(mut config) => {
             warnings.extend(sanitize(&mut config));
             LoadOutcome {
@@ -129,7 +129,10 @@ pub fn load_config(path: &Path) -> LoadOutcome {
             };
             let mut config = Config::default();
             warnings.extend(sanitize(&mut config));
-            warnings.push(format!("config.json 损坏，已改用默认值（原文件备份为 {}）", backup.display()));
+            warnings.push(format!(
+                "config.json 损坏，已改用默认值（原文件备份为 {}）",
+                backup.display()
+            ));
             LoadOutcome {
                 config,
                 source,
@@ -176,7 +179,9 @@ pub fn sanitize(config: &mut Config) -> Vec<String> {
         config.opacity = bounds::OPACITY_MAX;
         warnings.push("opacity not finite, reset to 1.0".to_owned());
     }
-    let opacity = config.opacity.clamp(bounds::OPACITY_MIN, bounds::OPACITY_MAX);
+    let opacity = config
+        .opacity
+        .clamp(bounds::OPACITY_MIN, bounds::OPACITY_MAX);
     if (opacity - config.opacity).abs() > f32::EPSILON {
         warnings.push(format!(
             "opacity {:.2} out of range, clamped to {opacity:.2}",
@@ -204,12 +209,14 @@ pub fn sanitize(config: &mut Config) -> Vec<String> {
     config.normalize_models();
 
     for entry in &mut config.models {
+        // Older configs only stored the mirrored window coordinates.
+        if entry.window_placement.is_unset() && (entry.window_x != -1 || entry.window_y != -1) {
+            entry.window_placement.x = entry.window_x;
+            entry.window_placement.y = entry.window_y;
+            entry.window_placement.width = entry.window_width;
+            entry.window_placement.height = entry.window_height;
+        }
         entry.sync_placement_mirror();
-    }
-
-    if let Some(entry) = config.models.first() {
-        config.character = entry.character.clone();
-        config.costume = entry.costume.clone();
     }
 
     // Make sure every region has an action, without inventing overrides.
@@ -235,7 +242,7 @@ pub fn apply_patch(
     let mut candidate = config.clone();
     let rejected = patch.apply_to(&mut candidate);
     let _ = sanitize(&mut candidate);
-    let written = candidate != *config;
+    let written = candidate != *config || !path.exists();
     if written {
         save_config(path, &candidate)?;
         *config = candidate;
@@ -301,7 +308,10 @@ pub fn cleanup_stale_temp_files(path: &Path) -> std::io::Result<()> {
     let Some(parent) = path.parent() else {
         return Ok(());
     };
-    let Some(stem) = path.file_name().map(|name| name.to_string_lossy().to_string()) else {
+    let Some(stem) = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+    else {
         return Ok(());
     };
     let cutoff = SystemTime::now() - std::time::Duration::from_secs(24 * 60 * 60);
@@ -312,7 +322,11 @@ pub fn cleanup_stale_temp_files(path: &Path) -> std::io::Result<()> {
             continue;
         }
         if let Ok(metadata) = entry.metadata() {
-            if metadata.modified().map(|time| time < cutoff).unwrap_or(false) {
+            if metadata
+                .modified()
+                .map(|time| time < cutoff)
+                .unwrap_or(false)
+            {
                 let _ = fs::remove_file(entry.path());
             }
         }
@@ -326,7 +340,10 @@ mod tests {
     use crate::{ClickAction, DarkTheme};
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("bandori-pet-lite-test-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "bandori-pet-lite-test-{name}-{}",
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("temp dir");
         dir
@@ -360,10 +377,9 @@ mod tests {
         let mut config = Config::default();
         config.fps = 90;
         config.dark_theme = DarkTheme::On;
-        config.click_motion_actions.insert(
-            "head".to_owned(),
-            ClickAction::new("smile01", "smile01"),
-        );
+        config
+            .click_motion_actions
+            .insert("head".to_owned(), ClickAction::new("smile01", "smile01"));
         save_config(&path, &config).expect("save");
         let loaded = load_config(&path);
         assert_eq!(loaded.config.fps, 90);
@@ -403,7 +419,10 @@ mod tests {
 
         let patch = SettingsPatch::from_pairs([
             ("fps", serde_json::json!(60)),
-            ("click_motion_actions.head.motion", serde_json::json!("smile01")),
+            (
+                "click_motion_actions.head.motion",
+                serde_json::json!("smile01"),
+            ),
         ]);
         let outcome = apply_patch(&path, &mut config, &patch).expect("apply");
         assert!(outcome.written);
@@ -414,5 +433,39 @@ mod tests {
         );
         let reloaded = load_config(&path).config;
         assert_eq!(reloaded.fps, 60);
+    }
+
+    #[test]
+    fn active_role_and_independent_legacy_positions_survive_reload() {
+        let dir = temp_dir("multi-role-legacy");
+        let path = dir.join("config.json");
+        fs::write(&path, concat!("\u{feff}", r#"{
+            "character":"anon", "costume":"school",
+            "models":[
+                {"character":"kasumi","costume":"live","path":"models/kasumi.zst::live/model.json","window_x":100,"window_y":200},
+                {"character":"anon","costume":"school","path":"models/anon.zst::school/model3.json","window_x":700,"window_y":250,"future_role_setting":{"enabled":true}}
+            ]
+        }"#)).unwrap();
+        let loaded = load_config(&path);
+        assert_eq!(loaded.source, LoadSource::Loaded);
+        assert_eq!(loaded.config.character, "anon");
+        assert_eq!(loaded.config.models[0].window_placement.x, 100);
+        assert_eq!(loaded.config.models[1].window_placement.x, 700);
+        assert_eq!(
+            loaded.config.models[1].extras["future_role_setting"]["enabled"],
+            true
+        );
+        save_config(&path, &loaded.config).unwrap();
+        assert_eq!(load_config(&path).config, loaded.config);
+    }
+
+    #[test]
+    fn unchanged_patch_creates_missing_config() {
+        let dir = temp_dir("patch-missing");
+        let path = dir.join("config.json");
+        let mut config = Config::default();
+        let outcome = apply_patch(&path, &mut config, &SettingsPatch::default()).unwrap();
+        assert!(outcome.written);
+        assert!(path.exists());
     }
 }

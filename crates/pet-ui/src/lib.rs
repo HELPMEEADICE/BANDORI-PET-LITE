@@ -127,6 +127,9 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                     .iter()
                     .position(|entry| entry.character == config.character)
                     .unwrap_or(0);
+                let mut entry = entry;
+                entry.window_placement = config.models[index].window_placement.clone();
+                entry.sync_placement_mirror();
                 config.models[index] = entry;
             } else {
                 config.models.push(entry);
@@ -189,6 +192,35 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
     {
         let send = Rc::clone(&send);
         let shared = Arc::clone(&shared);
+        let weak = window.as_weak();
+        window.on_select_model(move |index| {
+            let Some(config) = shared.config.lock().ok().and_then(|value| value.clone()) else {
+                return;
+            };
+            let Some(entry) = usize::try_from(index)
+                .ok()
+                .and_then(|index| config.models.get(index))
+            else {
+                return;
+            };
+            let patch = SettingsPatch::from_pairs([
+                ("character", serde_json::json!(entry.character)),
+                ("costume", serde_json::json!(entry.costume)),
+            ]);
+            if let Some(window) = weak.upgrade() {
+                if send(&Message::SettingsPatch { patch }) {
+                    window.set_picking_model(false);
+                    window.set_adding_model(false);
+                } else {
+                    window.set_status("桌宠进程未连接".into());
+                }
+            }
+        });
+    }
+    {
+        let send = Rc::clone(&send);
+        let shared = Arc::clone(&shared);
+        let weak = window.as_weak();
         window.on_remove_model(move |index| {
             let Some(mut config) = shared.config.lock().ok().and_then(|value| value.clone()) else {
                 return;
@@ -196,8 +228,14 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
             if index < 0 || index as usize >= config.models.len() {
                 return;
             }
+            if config.models.len() <= 1 {
+                if let Some(window) = weak.upgrade() {
+                    window.set_status("请至少保留一个角色".into());
+                }
+                return;
+            }
             config.models.remove(index as usize);
-            let active = config.models.first();
+            let active = config.active_entry();
             let patch = SettingsPatch::from_pairs([
                 ("models", serde_json::json!(config.models)),
                 (
@@ -209,7 +247,11 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                     serde_json::json!(active.map(|entry| entry.costume.as_str()).unwrap_or("")),
                 ),
             ]);
-            send(&Message::SettingsPatch { patch });
+            if !send(&Message::SettingsPatch { patch }) {
+                if let Some(window) = weak.upgrade() {
+                    window.set_status("桌宠进程未连接".into());
+                }
+            }
         });
     }
 
@@ -275,9 +317,11 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                     if let Ok(mut guard) = pump_shared.model.lock() {
                         *guard = model.clone();
                     }
-                    pump_shared.connected.store(true, Ordering::Relaxed);
+                    let was_connected = pump_shared.connected.swap(true, Ordering::Relaxed);
                     window.set_first_run(first_run);
-                    window.set_status("已连接桌宠进程".into());
+                    if !was_connected {
+                        window.set_status("已连接桌宠进程".into());
+                    }
                     pump_picker.update_config(&window, &parsed);
                     apply_config_to_window(
                         &window,
@@ -611,6 +655,16 @@ fn apply_config_to_window(
     window.set_poke_expression(config.poke_expression.clone().into());
 
     window.set_has_model(!config.models.is_empty());
+    window.set_active_model_index(
+        config
+            .models
+            .iter()
+            .position(|entry| {
+                entry.character == config.character && entry.costume == config.costume
+            })
+            .map(|index| index as i32)
+            .unwrap_or(-1),
+    );
     if config.models.is_empty() {
         window.set_picking_model(true);
     }
@@ -805,6 +859,73 @@ mod tests {
         let rows = items_to_slint(&items);
         assert_eq!(rows.len(), 4);
         assert_eq!(rows[1].action.as_str(), "motion");
+    }
+
+    #[test]
+    fn model_list_keeps_selection_and_targets_the_clicked_role() {
+        use i_slint_backend_testing::{ElementHandle, TestingBackend, TestingBackendOptions};
+        slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions {
+            renderer_name: Some("software".into()),
+            mock_time: true,
+            ..Default::default()
+        })))
+        .unwrap();
+        let window = SettingsWindow::new().unwrap();
+        let mut config = Config::default();
+        config.models = vec![
+            pet_config::ModelEntry::new(
+                "kasumi",
+                "live",
+                "models/kasumi.zst::live/model.json",
+                pet_config::ModelFormat::Moc,
+            ),
+            pet_config::ModelEntry::new(
+                "anon",
+                "school",
+                "models/anon.zst::school/model3.json",
+                pet_config::ModelFormat::Moc3,
+            ),
+        ];
+        config.character = "anon".into();
+        config.costume = "school".into();
+        apply_config_to_window(
+            &window,
+            &config,
+            &ModelData::default(),
+            &Paths::with_root("C:/app"),
+            &Catalog::default(),
+        );
+        assert_eq!(window.get_active_model_index(), 1);
+        let selected = Rc::new(std::cell::Cell::new(-1));
+        let removed = Rc::new(std::cell::Cell::new(-1));
+        let result = selected.clone();
+        window.on_select_model(move |index| result.set(index));
+        let result = removed.clone();
+        window.on_remove_model(move |index| result.set(index));
+        window.show().unwrap();
+        let _ = window.window().take_snapshot().unwrap();
+        ElementHandle::find_by_accessible_label(&window, "选择角色：anon")
+            .next()
+            .unwrap()
+            .invoke_accessible_default_action();
+        ElementHandle::find_by_accessible_label(&window, "移除角色：kasumi")
+            .next()
+            .unwrap()
+            .invoke_accessible_default_action();
+        assert_eq!(selected.get(), 1);
+        assert_eq!(removed.get(), 0);
+        if let Ok(output) = std::env::var("BANDORI_UI_QA_DIR") {
+            std::fs::create_dir_all(&output).unwrap();
+            let snapshot = window.window().take_snapshot().unwrap();
+            image::save_buffer(
+                std::path::Path::new(&output).join("multi-role-list.png"),
+                snapshot.as_bytes(),
+                snapshot.width(),
+                snapshot.height(),
+                image::ColorType::Rgba8,
+            )
+            .unwrap();
+        }
     }
 
     #[test]

@@ -97,3 +97,15 @@ $env:BANDORI_PET_ROOT = "$PWD\run"; $env:RUST_LOG = "info,pet_app=debug"
 验证：
 * `cargo test -p pet-app --test orientation`（需 `BANDORI_PET_TEST_MODELS`）：moc 包围盒 `(299.8,366.2)..(1703.6,2934.9)`、画布 2000×2500 → 画布像素空间；翻转后 y=366.2 映射到 clip +1.000（顶部），y=2934.9 映射到 −1.000（底部）；moc3 包围盒 `(-0.22,-0.73)..(0.22,0.55)` 居中、不翻转。
 * 同一窗口区域像素 A/B：发色簇 y 中心 **0.758 → 0.241**（从底部两成移到顶部两成），剪影覆盖率由上到下 `0.64→0.23`（腿在最下方变窄）。
+
+### 2026-10-26 · config.json 与运行中多角色放置
+
+修复了新增 `models[]` 项却没有创建窗口、保存运行状态时用成功加载的窗口覆盖整个模型列表、保存时把当前选择强制切回首个角色的问题。模型列表更新现在在 winit 活动事件循环中创建或移除窗口，共享 GPU；同角色换装保留窗口，新增和重置位置优先避开已有角色。角色列表支持点选当前编辑角色，切换和移除均作用于对应条目。
+
+设置及每个角色的独立位置写入运行目录的 `config.json`。读取兼容 UTF-8 BOM 和旧版坐标字段，保留顶层及角色条目的未知设置；模型缺失或加载失败的条目不会被后续保存删除。设置窗口会保留保存失败或模型加载失败的反馈。
+
+验证：
+
+* `cargo test --workspace` 覆盖配置/IPC、旧配置读取、错开放置和角色列表选择；真实模型/GPU 回归默认忽略。
+* `BANDORI_PET_TEST_ROOT=run` 下执行 `cargo test -p pet-app --test multi_role_runtime -- --ignored --nocapture`，Windows / RTX 5080 / Vulkan 实测通过：kasumi `live_default`（moc）与 anon `casual_spring_01`（moc3）由 1 个窗口增加至 2 个，移除后为 1 个；anon 换装 `school_winter_hs_1st` 复用窗口；组合模型/缩放补丁保持窗口列表；模拟缺失模型后保存仍保留条目；重新创建应用后按 `Absolute` 恢复独立位置和不透明度。
+* 本地 anon `birthday_2024_ssr` 的旧 `.moc` 在现有解析器中会报 `expected an id string`，属于已有模型兼容性限制；此次确认加载失败条目仍能保留在配置中。

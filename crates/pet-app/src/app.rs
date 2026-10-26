@@ -34,6 +34,8 @@ pub struct PetApp {
     /// Loaded lazily: scanning 64 archives must not delay the first frame.
     catalog: Option<Catalog>,
     roles: Vec<Role>,
+    /// Window creation must run inside the active winit event loop.
+    roles_dirty: bool,
     tray: Option<Tray>,
     ipc: IpcHost,
     ui: UiSupervisor,
@@ -94,6 +96,7 @@ impl PetApp {
         let tray = None;
         let tray_sender = Some(tray_tx);
         let create_tray = enable_tray;
+        let config_dirty = load.is_first_run() || !load.warnings.is_empty();
 
         Ok(Self {
             paths,
@@ -102,13 +105,14 @@ impl PetApp {
             cache,
             catalog,
             roles: Vec::new(),
+            roles_dirty: true,
             tray,
             ipc,
             ui,
             started: Instant::now(),
             last_frame: Instant::now(),
             last_config_save: Instant::now(),
-            config_dirty: false,
+            config_dirty,
             hidden: false,
             gpu: None,
             tray_events,
@@ -162,16 +166,26 @@ impl PetApp {
     /// Ensures at least one usable `models[]` entry, falling back to the catalog.
     fn ensure_role_entries(&mut self) -> bool {
         if self.config.needs_model_selection() {
+            let preferred_character = self.config.character.clone();
+            let preferred_costume = self.config.costume.clone();
             let catalog = self.ensure_catalog();
-            let default_entry = catalog.characters().first().and_then(|character| {
-                character.costumes.first().map(|costume| {
-                    (
-                        character.key.clone(),
-                        costume.id.clone(),
-                        crate::role::entry_for_selection(&character.key, costume),
-                    )
-                })
-            });
+            let default_entry = catalog
+                .character(&preferred_character)
+                .or_else(|| catalog.characters().first())
+                .and_then(|character| {
+                    character
+                        .costumes
+                        .iter()
+                        .find(|costume| costume.id == preferred_costume)
+                        .or_else(|| character.costumes.first())
+                        .map(|costume| {
+                            (
+                                character.key.clone(),
+                                costume.id.clone(),
+                                crate::role::entry_for_selection(&character.key, costume),
+                            )
+                        })
+                });
             let Some((character, costume, entry)) = default_entry else {
                 return false;
             };
@@ -192,40 +206,7 @@ impl PetApp {
             self.open_settings(SettingsPage::Model);
             return;
         }
-        let entries: Vec<_> = self.config.models.clone();
-        for entry in entries {
-            match self.gpu.clone() {
-                Some(gpu) => match Role::create(
-                    event_loop,
-                    &entry,
-                    &self.config,
-                    &self.paths,
-                    &self.cache,
-                    Some(gpu),
-                ) {
-                    Ok(role) => self.roles.push(role),
-                    Err(error) => {
-                        error!(%error, "failed to create role window");
-                    }
-                },
-                None => match Role::create(
-                    event_loop,
-                    &entry,
-                    &self.config,
-                    &self.paths,
-                    &self.cache,
-                    None,
-                ) {
-                    Ok(role) => {
-                        self.gpu = Some(role.renderer.gpu().clone());
-                        self.roles.push(role);
-                    }
-                    Err(error) => {
-                        error!(%error, "failed to create role window");
-                    }
-                },
-            }
-        }
+        self.reconcile_roles(event_loop);
         if self.roles.is_empty() {
             self.open_settings(SettingsPage::Model);
         }
@@ -235,21 +216,17 @@ impl PetApp {
     }
 
     fn role_index(&self, id: WindowId) -> Option<usize> {
-        self.roles
-            .iter()
-            .position(|role| role.window.id() == id)
+        self.roles.iter().position(|role| role.window.id() == id)
     }
 
     fn open_settings(&mut self, page: SettingsPage) {
-        self.ipc
-            .send(&Message::OpenSettings { page });
+        self.ipc.send(&Message::OpenSettings { page });
         self.ui.ensure_running();
     }
 
     fn send_snapshot(&self) {
         let model = self
-            .roles
-            .first()
+            .active_role()
             .map(|role| ModelData {
                 character: role.character.clone(),
                 costume: role.costume.clone(),
@@ -270,16 +247,57 @@ impl PetApp {
     }
 
     fn handle_patch(&mut self, mut patch: pet_config::SettingsPatch) {
+        self.sync_models_from_roles();
+        // A UI snapshot can predate a drag. The host owns live placement, so
+        // preserve it when a model-list patch keeps or changes a role's costume.
+        if let Some(value) = patch.values.get_mut("models") {
+            if let Ok(mut entries) =
+                serde_json::from_value::<Vec<pet_config::ModelEntry>>(value.clone())
+            {
+                for entry in &mut entries {
+                    if let Some(current) = self
+                        .config
+                        .models
+                        .iter()
+                        .find(|current| current.character == entry.character)
+                    {
+                        entry.window_placement = current.window_placement.clone();
+                        entry.sync_placement_mirror();
+                    }
+                }
+                *value = serde_json::json!(entries);
+            }
+        }
         self.expand_preset(&mut patch);
         let level = patch.highest_apply_level();
         let path = self.paths.config();
-        let outcome = pet_config::apply_patch(&path, &mut self.config, &patch);
+        let outcome =
+            pet_config::apply_patch(&path, &mut self.config, &patch).and_then(|outcome| {
+                if self.config_dirty && !outcome.written {
+                    pet_config::save_config(&path, &self.config)?;
+                }
+                Ok(outcome)
+            });
         match outcome {
             Ok(outcome) => {
                 self.config_dirty = false;
                 self.last_config_save = Instant::now();
                 info!(?level, written = outcome.written, "settings applied");
+                // Model lists also need reconciling when another key in the
+                // same patch has a higher apply level (e.g. scale or vsync).
+                if patch.values.keys().any(|key| {
+                    matches!(
+                        key.split('.').next().unwrap_or(key),
+                        "models" | "character" | "costume"
+                    )
+                }) {
+                    self.roles_dirty = true;
+                }
                 self.apply_level(level);
+                self.sync_models_from_roles();
+                if self.config_dirty {
+                    self.persist_now();
+                }
                 self.ipc.send(&Message::PatchApplied {
                     ok: true,
                     rejected: outcome.rejected,
@@ -288,14 +306,14 @@ impl PetApp {
             }
             Err(error) => {
                 error!(%error, "failed to save settings");
-                self.ipc.send(&Message::Error {
-                    kind: "config".to_owned(),
-                    message: format!("保存设置失败：{error}"),
-                });
                 self.ipc.send(&Message::PatchApplied {
                     ok: false,
                     rejected: vec!["*".to_owned()],
                     config: serde_json::to_value(&self.config).unwrap_or_default(),
+                });
+                self.ipc.send(&Message::Error {
+                    kind: "config".to_owned(),
+                    message: format!("保存设置失败：{error}"),
                 });
             }
         }
@@ -317,14 +335,15 @@ impl PetApp {
         if !pet_config::is_builtin_name(&profile) {
             return;
         }
-        let Some(role) = self.roles.first() else {
+        let Some(role) = self.active_role() else {
             return;
         };
         let motions = role.motion_names().to_vec();
         let expressions = role.expression_names().to_vec();
         let character = role.character.clone();
         let mut rng = pet_util::Rng::from_entropy();
-        let actions = pet_input::resolve_preset(&profile, &motions, &expressions, &character, &mut rng);
+        let actions =
+            pet_input::resolve_preset(&profile, &motions, &expressions, &character, &mut rng);
         for (region, action) in actions {
             patch.values.insert(
                 format!("click_motion_actions.{region}.motion"),
@@ -339,7 +358,7 @@ impl PetApp {
     }
 
     fn broadcast_model_data(&self) {
-        if let Some(role) = self.roles.first() {
+        if let Some(role) = self.active_role() {
             self.ipc.send(&Message::ModelData(ModelData {
                 character: role.character.clone(),
                 costume: role.costume.clone(),
@@ -353,33 +372,27 @@ impl PetApp {
     }
 
     fn apply_level(&mut self, level: ApplyLevel) {
-        match level {
-            ApplyLevel::Instant => {
-                for role in &mut self.roles {
-                    role.set_behavior_config(&self.config);
-                    role.apply_display_settings(&self.config);
+        for role in &mut self.roles {
+            role.set_behavior_config(&self.config);
+            role.apply_display_settings(&self.config);
+        }
+        if self.config.auto_start != self.auto_start_applied {
+            match pet_window::set_auto_start(&self.paths.pet_executable(), self.config.auto_start) {
+                Ok(()) => {
+                    self.auto_start_applied = self.config.auto_start;
+                    info!(enabled = self.config.auto_start, "autostart updated");
                 }
-                if self.config.auto_start != self.auto_start_applied {
-                    match pet_window::set_auto_start(&self.paths.pet_executable(), self.config.auto_start)
-                    {
-                        Ok(()) => {
-                            self.auto_start_applied = self.config.auto_start;
-                            info!(enabled = self.config.auto_start, "autostart updated");
-                        }
-                        Err(error) => warn!(%error, "failed to update autostart"),
-                    }
-                }
+                Err(error) => warn!(%error, "failed to update autostart"),
             }
+        }
+        match level {
+            ApplyLevel::Instant => {}
             ApplyLevel::ReloadModel => {
-                self.reload_roles();
+                self.roles_dirty = true;
             }
             ApplyLevel::RebuildWindow => {
-                let dpr = self
-                    .roles
-                    .first()
-                    .map(|role| role.window.scale_factor())
-                    .unwrap_or(1.0);
                 for role in &mut self.roles {
+                    let dpr = role.window.scale_factor();
                     if let Err(error) = role.apply_scale(&self.config, dpr) {
                         error!(%error, "failed to rebuild role window");
                     }
@@ -396,23 +409,38 @@ impl PetApp {
         }
     }
 
-    fn reload_roles(&mut self) {
+    fn active_role(&self) -> Option<&Role> {
+        self.roles.iter().find(|role| {
+            role.character == self.config.character && role.costume == self.config.costume
+        })
+    }
+
+    fn reconcile_roles(&mut self, event_loop: &ActiveEventLoop) {
+        self.roles_dirty = false;
+        if self.headless {
+            return;
+        }
         let entries: Vec<_> = self.config.models.clone();
         let mut new_roles: Vec<Role> = Vec::new();
         let mut reusable: Vec<Role> = std::mem::take(&mut self.roles);
         for entry in entries {
             // Reuse the window when the character/costume pair is unchanged.
-            if let Some(position) = reusable
-                .iter()
-                .position(|role| role.character == entry.character && role.costume == entry.costume)
-            {
+            if let Some(position) = reusable.iter().position(|role| {
+                role.character == entry.character
+                    && role.costume == entry.costume
+                    && role.entry.path == entry.path
+            }) {
                 let mut role = reusable.remove(position);
                 role.set_behavior_config(&self.config);
                 role.apply_display_settings(&self.config);
                 new_roles.push(role);
                 continue;
             }
-            if let Some(mut role) = reusable.pop() {
+            if let Some(position) = reusable
+                .iter()
+                .position(|role| role.character == entry.character)
+            {
+                let mut role = reusable.remove(position);
                 match role.swap_model(&entry, &self.cache, &self.config) {
                     Ok(()) => {
                         role.set_behavior_config(&self.config);
@@ -421,15 +449,58 @@ impl PetApp {
                     }
                     Err(error) => {
                         error!(%error, "failed to swap model");
+                        self.ipc.send(&Message::Error {
+                            kind: "model".to_owned(),
+                            message: format!(
+                                "无法加载角色 {} 的服装 {}：{error}",
+                                entry.character, entry.costume
+                            ),
+                        });
                         new_roles.push(role);
+                    }
+                }
+            } else {
+                match Role::create(
+                    event_loop,
+                    &entry,
+                    &self.config,
+                    &self.paths,
+                    &self.cache,
+                    self.gpu.clone(),
+                ) {
+                    Ok(mut role) => {
+                        self.gpu = Some(role.renderer.gpu().clone());
+                        if entry.window_placement.is_unset() {
+                            let occupied: Vec<_> = new_roles
+                                .iter()
+                                .chain(reusable.iter())
+                                .filter_map(Role::window_rect)
+                                .collect();
+                            role.place_apart(&occupied);
+                        }
+                        role.set_hidden(self.hidden);
+                        role.apply_display_settings(&self.config);
+                        role.record_placement();
+                        new_roles.push(role);
+                    }
+                    Err(error) => {
+                        error!(character = %entry.character, %error, "failed to create role window");
+                        self.ipc.send(&Message::Error {
+                            kind: "model".to_owned(),
+                            message: format!("无法加载角色 {}：{error}", entry.character),
+                        });
                     }
                 }
             }
         }
+        self.drag_peer = None;
         self.roles = new_roles;
         if self.roles.is_empty() {
             warn!("no roles left after reload");
         }
+        self.persist_now();
+        self.send_snapshot();
+        self.broadcast_model_data();
     }
 
     /// Applies this tick's drag delta to every other role window (spec §2.8).
@@ -461,6 +532,7 @@ impl PetApp {
     }
 
     fn reset_positions(&mut self) {
+        let mut occupied = Vec::new();
         for role in &mut self.roles {
             let monitors = placement::monitors();
             let primary = monitors.iter().find(|monitor| monitor.is_primary).cloned();
@@ -472,8 +544,14 @@ impl PetApp {
                 primary.as_ref(),
             );
             role.set_position(resolved.x, resolved.y);
+            role.place_apart(&occupied);
             role.record_placement();
+            if let Some(rect) = role.window_rect() {
+                occupied.push(rect);
+            }
         }
+        self.persist_now();
+        self.send_snapshot();
         info!("all role positions reset");
     }
 
@@ -520,18 +598,24 @@ impl PetApp {
                     warn!(%character, %costume, "unknown selection");
                     return;
                 };
-                self.config.models.clear();
-                self.config.models.push(entry);
-                self.config.character = character;
-                self.config.costume = costume;
-                self.config.model_picker_state.remember(
-                    &self.config.character,
-                    &self.config.costume,
-                );
-                self.reload_roles();
-                self.send_snapshot();
-                self.broadcast_model_data();
-                self.persist_now();
+                let mut models = self.config.models.clone();
+                if let Some(existing) = models.iter_mut().find(|model| model.character == character)
+                {
+                    let placement = existing.window_placement.clone();
+                    *existing = entry;
+                    existing.window_placement = placement;
+                    existing.sync_placement_mirror();
+                } else {
+                    models.push(entry);
+                }
+                let mut picker = self.config.model_picker_state.clone();
+                picker.remember(&character, &costume);
+                self.handle_patch(pet_config::SettingsPatch::from_pairs([
+                    ("models", serde_json::json!(models)),
+                    ("character", serde_json::json!(character)),
+                    ("costume", serde_json::json!(costume)),
+                    ("model_picker_state", serde_json::json!(picker)),
+                ]));
             }
             Message::OpenModelFolder => {
                 let folder = self.paths.models();
@@ -555,7 +639,11 @@ impl PetApp {
             "costume" => self.open_settings(SettingsPage::Model),
             "motion" => {
                 let now = self.now();
-                if let Some(role) = self.roles.first_mut() {
+                if let Some(role) = self
+                    .roles
+                    .iter_mut()
+                    .find(|role| role.character == self.config.character)
+                {
                     role.play_menu_motion(now);
                 }
             }
@@ -572,24 +660,36 @@ impl PetApp {
 
     /// Copies live role state (placement, character/costume) back into the config.
     fn sync_models_from_roles(&mut self) {
-        if self.roles.is_empty() {
-            return;
-        }
-        self.config.models = self.roles.iter().map(Role::entry).collect();
-        if let Some(first) = self.config.models.first() {
-            self.config.character = first.character.clone();
-            self.config.costume = first.costume.clone();
+        // Keep the configured list authoritative, including models that failed
+        // to load. A stale/failed window must never replace a requested model.
+        for entry in &mut self.config.models {
+            if let Some(role) = self.roles.iter().find(|role| {
+                role.character == entry.character
+                    && role.costume == entry.costume
+                    && role.entry.path == entry.path
+            }) {
+                if entry.window_placement != role.placement {
+                    entry.window_placement = role.placement.clone();
+                    self.config_dirty = true;
+                }
+                entry.sync_placement_mirror();
+            }
         }
     }
 
     fn persist_now(&mut self) {
         self.sync_models_from_roles();
         let path = self.paths.config();
+        self.last_config_save = Instant::now();
         if let Err(error) = pet_config::save_config(&path, &self.config) {
+            self.config_dirty = true;
             error!(%error, "failed to write config");
+            self.ipc.send(&Message::Error {
+                kind: "config".to_owned(),
+                message: format!("保存设置失败：{error}"),
+            });
         } else {
             self.config_dirty = false;
-            self.last_config_save = Instant::now();
         }
     }
 
@@ -700,9 +800,13 @@ impl PetApp {
         let Some(role) = self.roles.get(role_index) else {
             return;
         };
-        let (x, y, width, height) = role
-            .window_rect()
-            .unwrap_or((role.base_position.0, role.base_position.1, 0, 0));
+        let (x, y, width, height) =
+            role.window_rect()
+                .unwrap_or((role.base_position.0, role.base_position.1, 0, 0));
+        self.config.character = role.character.clone();
+        self.config.costume = role.costume.clone();
+        self.config_dirty = true;
+        self.send_snapshot();
         self.menu_open_until = Some(Instant::now() + Duration::from_secs(10));
         self.ipc.send(&Message::MenuShow {
             x: x + width as i32 / 2,
@@ -721,7 +825,6 @@ impl PetApp {
         self.ipc.send(&Message::Quit);
     }
 }
-
 
 impl ApplicationHandler for PetApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -789,6 +892,8 @@ impl ApplicationHandler for PetApp {
                         let on_model = role.on_left_press(cursor, &self.config, now_ms);
                         if on_model {
                             role.note_interaction(interaction_time);
+                            self.drag_peer =
+                                role.window_rect().map(|(x, y, ..)| (index, (x, y), (0, 0)));
                         }
                     }
                     ElementState::Released => {
@@ -835,7 +940,13 @@ impl ApplicationHandler for PetApp {
                             self.config_dirty = true;
                         } else if delta.0.abs() + delta.1.abs() > 0.0 {
                             self.config_dirty = true;
+                            if self.config.move_all_roles_together {
+                                for peer in &mut self.roles {
+                                    peer.record_placement();
+                                }
+                            }
                         }
+                        self.drag_peer = None;
                     }
                 }
             }
@@ -869,6 +980,9 @@ impl ApplicationHandler for PetApp {
             return;
         }
         self.drain_ipc();
+        if self.roles_dirty {
+            self.reconcile_roles(event_loop);
+        }
         self.drain_tray();
         self.ui.tick();
         self.tick_roles();
@@ -954,21 +1068,3 @@ pub fn run(paths: Paths) -> AppResult<()> {
 pub fn about_lines(paths: &Paths, config: &Config) -> Vec<(String, String)> {
     pet_config::paths::about_lines(paths, config)
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
