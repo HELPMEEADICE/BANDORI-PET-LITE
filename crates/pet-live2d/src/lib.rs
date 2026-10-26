@@ -10,6 +10,7 @@
 //!   assembled here, following `examples/show_model.rs::advance_model_frame`.
 
 mod blink;
+mod framing;
 mod moc2;
 mod moc3;
 
@@ -19,8 +20,8 @@ pub use blink::{BlinkBreath, BlinkOutput};
 pub use moc2::Moc2Adapter;
 pub use moc3::Moc3Adapter;
 
-use neocari::moc3::Moc3DrawableMesh;
 use neocari::assets::DecodedTexture;
+use neocari::moc3::Moc3DrawableMesh;
 use pet_config::ModelFormat;
 
 /// Errors raised while loading or driving a model.
@@ -224,6 +225,14 @@ impl ModelHandle {
         self.info().format
     }
 
+    /// Neutral face height, independent of hair, costume, and full/bust framing.
+    pub fn face_height(&self) -> Option<f32> {
+        match self {
+            ModelHandle::Moc2(adapter) => adapter.face_height(),
+            ModelHandle::Moc3(adapter) => adapter.face_height(),
+        }
+    }
+
     /// `true` when the model's y axis points down (Cubism 2 `.moc`).
     ///
     /// Cubism 2 coordinates are canvas pixels measured from the top-left corner
@@ -233,4 +242,3 @@ impl ModelHandle {
         matches!(self, ModelHandle::Moc2(_))
     }
 }
-

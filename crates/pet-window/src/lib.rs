@@ -13,7 +13,7 @@ pub mod win32;
 pub use placement::{
     auto_start_enabled, resolve_position, set_auto_start, MonitorInfo, PositionDecision,
 };
-pub use sizing::{content_size, fit_matrix, window_size_for_model, Bounds};
+pub use sizing::{content_size, fit_matrix, Bounds, ModelLayout};
 
 #[cfg(windows)]
 pub use win32::{

@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 
 use neocari::assets::{load_model_runtime, DecodedTexture, RuntimeModel};
 use neocari::expression::{load_expression, ExpressionManager};
-use neocari::moc3::Moc3DrawableMesh;
 use neocari::json::{Expression3, Motion3};
+use neocari::moc3::Moc3DrawableMesh;
 use neocari::motion::{load_motion, MotionPlayer};
 use pet_config::ModelFormat;
 use pet_util::Rng;
@@ -49,6 +49,7 @@ pub struct Moc3Adapter {
     model: RuntimeModel,
     model_dir: PathBuf,
     info: ModelInfo,
+    face_height: Option<f32>,
     motion_paths: HashMap<String, Vec<PathBuf>>,
     expression_paths: HashMap<String, PathBuf>,
     motion_cache: HashMap<PathBuf, Motion3>,
@@ -125,11 +126,13 @@ impl Moc3Adapter {
             canvas_height: canvas.height() as f32,
         };
 
+        let face_height = crate::framing::moc3_face_height(&model, &model_dir);
         let seed = pet_util::Rng::from_entropy().next_u64();
         Ok(Self {
             model,
             model_dir,
             info,
+            face_height,
             motion_paths,
             expression_paths,
             motion_cache: HashMap::new(),
@@ -149,6 +152,11 @@ impl Moc3Adapter {
         &self.info
     }
 
+    /// Face height measured once in the neutral pose.
+    pub fn face_height(&self) -> Option<f32> {
+        self.face_height
+    }
+
     /// Current meshes.
     pub fn meshes(&self) -> &[Moc3DrawableMesh] {
         self.model.runtime().meshes()
@@ -162,7 +170,11 @@ impl Moc3Adapter {
     /// Advances one frame (see the module docs for the exact order).
     pub fn update(&mut self, delta_seconds: f32) -> bool {
         let delta = delta_seconds.clamp(0.0, 0.25);
-        let mut rng = Rng::seeded(self.player.as_ref().map_or(1, |player| player.player.time() as u64 + 7));
+        let mut rng = Rng::seeded(
+            self.player
+                .as_ref()
+                .map_or(1, |player| player.player.time() as u64 + 7),
+        );
         let _ = &mut rng; // blink has its own generator
         let blink = self.blink.tick(delta);
 
@@ -327,4 +339,3 @@ impl Moc3Adapter {
         &self.model
     }
 }
-

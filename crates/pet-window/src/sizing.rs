@@ -1,11 +1,8 @@
-//! Window sizing from model content bounds (spec §2.1, §2.6).
-//!
-//! The original used a fixed 400×500 base and then patched moc3 with an 800 px
-//! virtual canvas plus leg cropping. LITE derives the window from the actual
-//! content AABB instead, so those two options disappear.
+//! Face-normalized model sizing with a separate, padded animation viewport.
 
 use neocari::core::Matrix44;
 use neocari::moc3::Moc3DrawableMesh;
+use pet_config::ModelFormat;
 
 /// Model-space axis-aligned bounding box.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -51,8 +48,65 @@ impl Bounds {
     }
 }
 
-/// Logical window height at 100% scale (model is fitted to this).
+/// Reference bust height at 100% scale, before animation padding.
 pub const BASE_LOGICAL_HEIGHT: f32 = 500.0;
+
+/// Shared neutral face height at 100%, close to the original moc bust scale.
+pub const BASE_FACE_HEIGHT: f32 = 120.0;
+
+/// Static framing: animation never changes the model's apparent size.
+#[derive(Debug, Clone, Copy)]
+pub struct ModelLayout {
+    /// Model-space viewport, including transparent room for arms and hair.
+    pub viewport: Bounds,
+    pixels_per_unit: f32,
+}
+
+impl ModelLayout {
+    /// Uses the neutral face as a common ruler for bust and full-body models.
+    /// Models without face metadata fall back to conventional format framing.
+    pub fn new(content: Bounds, face_height: Option<f32>, format: ModelFormat) -> Self {
+        let reference_height = face_height
+            .filter(|height| height.is_finite() && *height > 1e-4)
+            .map(|height| height * BASE_LOGICAL_HEIGHT / BASE_FACE_HEIGHT)
+            .unwrap_or_else(|| {
+                content.height()
+                    * if format == ModelFormat::Moc3 {
+                        0.65
+                    } else {
+                        1.0
+                    }
+            });
+        let pad_x = reference_height * 0.35;
+        let pad_y = reference_height * 0.15;
+        Self {
+            viewport: Bounds {
+                min_x: content.min_x - pad_x,
+                max_x: content.max_x + pad_x,
+                min_y: content.min_y - pad_y,
+                max_y: content.max_y + pad_y,
+            },
+            pixels_per_unit: BASE_LOGICAL_HEIGHT / reference_height,
+        }
+    }
+
+    /// Physical size, keeping the same scale on both axes even at size limits.
+    pub fn window_size(&self, scale_percent: f32, dpr: f64) -> (u32, u32) {
+        let scale = (scale_percent / 100.0).clamp(0.25, 5.0) as f64 * dpr;
+        let width = self.viewport.width() as f64 * self.pixels_per_unit as f64 * scale;
+        let height = self.viewport.height() as f64 * self.pixels_per_unit as f64 * scale;
+        let limit = (8192.0 / width.max(height)).min(1.0);
+        (
+            (width * limit).round().max(1.0) as u32,
+            (height * limit).round().max(1.0) as u32,
+        )
+    }
+
+    /// Uses the padded viewport for both rendering and inverse hit testing.
+    pub fn matrix(&self, flip_y: bool) -> Matrix44 {
+        fit_matrix(self.viewport, 1.0, flip_y)
+    }
+}
 
 /// Computes the content AABB of a model's meshes.
 pub fn content_size(meshes: &[Moc3DrawableMesh]) -> Option<Bounds> {
@@ -77,20 +131,9 @@ pub fn content_size(meshes: &[Moc3DrawableMesh]) -> Option<Bounds> {
     bounds.filter(|bounds| bounds.width() > 1e-4 && bounds.height() > 1e-4)
 }
 
-/// Window size (physical pixels) for a model at `scale_percent` and `dpr`.
-pub fn window_size_for_model(bounds: Bounds, scale_percent: f32, dpr: f64) -> (u32, u32) {
-    let scale = (scale_percent / 100.0).clamp(0.25, 5.0) as f64;
-    let logical_height = BASE_LOGICAL_HEIGHT as f64 * scale;
-    let logical_width = (logical_height * bounds.aspect() as f64).max(64.0);
-    let width = (logical_width * dpr).round().clamp(64.0, 8192.0) as u32;
-    let height = (logical_height * dpr).round().clamp(64.0, 8192.0) as u32;
-    (width, height)
-}
-
 /// Builds the model → clip transform that fits `bounds` exactly into the window.
 ///
-/// Unlike the Neocari example this has no view fill factor: the window is already
-/// sized to the content, so `1.0` fills it.
+/// Desktop pets pass the padded viewport; static previews pass content bounds.
 ///
 /// `flip_y` is **not** a preference: Cubism 2 model coordinates put the origin at
 /// the top-left corner with y pointing down, while Cubism 3+ points y up. Neocari's
@@ -142,19 +185,92 @@ mod tests {
     }
 
     #[test]
-    fn window_size_tracks_aspect_and_dpr() {
+    fn padding_adds_room_without_shrinking_the_model() {
         let bounds = Bounds {
             min_x: -0.5,
             min_y: -0.75,
             max_x: 0.5,
             max_y: 0.75,
         };
-        let (width, height) = window_size_for_model(bounds, 100.0, 1.0);
-        assert_eq!(height, 500);
-        assert!((width as f32 - 500.0 * bounds.aspect()).abs() < 1.0);
-        let (scaled_width, scaled_height) = window_size_for_model(bounds, 200.0, 1.5);
-        assert_eq!(scaled_height, 1500);
-        assert!((scaled_width as f32 - 1500.0 * bounds.aspect()).abs() < 1.0);
+        let layout = ModelLayout::new(bounds, None, ModelFormat::Moc);
+        let (width, height) = layout.window_size(100.0, 1.0);
+        assert_eq!(height, 650);
+        assert!((width as f32 - (500.0 * bounds.aspect() + 350.0)).abs() < 1.0);
+        let matrix = layout.matrix(false);
+        let visible_height = (matrix.transform_y(bounds.max_y) - matrix.transform_y(bounds.min_y))
+            * height as f32
+            / 2.0;
+        assert!((visible_height - 500.0).abs() < 0.01);
+        let (scaled_width, scaled_height) = layout.window_size(200.0, 1.5);
+        assert_eq!(scaled_height, 1950);
+        assert!((scaled_width as f32 - width as f32 * 3.0).abs() <= 1.0);
+    }
+
+    #[test]
+    fn face_scale_matches_across_coordinate_systems_and_body_lengths() {
+        for (bounds, face, format, flip_y) in [
+            (
+                Bounds {
+                    min_x: 300.0,
+                    min_y: 350.0,
+                    max_x: 1700.0,
+                    max_y: 2900.0,
+                },
+                600.0,
+                ModelFormat::Moc,
+                true,
+            ),
+            (
+                Bounds {
+                    min_x: -0.22,
+                    min_y: -0.73,
+                    max_x: 0.22,
+                    max_y: 0.55,
+                },
+                0.2,
+                ModelFormat::Moc3,
+                false,
+            ),
+        ] {
+            let layout = ModelLayout::new(bounds, Some(face), format);
+            for (scale, dpr) in [(50.0, 1.0), (100.0, 1.5), (200.0, 2.0)] {
+                let (width, height) = layout.window_size(scale, dpr);
+                let matrix = layout.matrix(flip_y);
+                let face_pixels = (matrix.transform_y(face) - matrix.transform_y(0.0)).abs()
+                    * height as f32
+                    / 2.0;
+                assert!((face_pixels - BASE_FACE_HEIGHT * scale / 100.0 * dpr as f32).abs() < 0.5);
+                let pixels_x =
+                    (matrix.transform_x(face) - matrix.transform_x(0.0)).abs() * width as f32 / 2.0;
+                assert!(
+                    (face_pixels - pixels_x).abs() < 0.5,
+                    "must preserve proportions"
+                );
+                assert!(matrix.transform_x(bounds.min_x) > -1.0);
+                assert!(matrix.transform_x(bounds.max_x) < 1.0);
+            }
+        }
+    }
+
+    #[test]
+    fn texture_limit_preserves_aspect_and_bad_face_metadata_uses_fallback() {
+        let bounds = Bounds {
+            min_x: -0.5,
+            min_y: -1.0,
+            max_x: 0.5,
+            max_y: 1.0,
+        };
+        let fallback = ModelLayout::new(bounds, None, ModelFormat::Moc3);
+        for face in [f32::NAN, f32::INFINITY, 0.0, -1.0] {
+            let layout = ModelLayout::new(bounds, Some(face), ModelFormat::Moc3);
+            assert_eq!(
+                layout.window_size(100.0, 1.0),
+                fallback.window_size(100.0, 1.0)
+            );
+        }
+        let (width, height) = fallback.window_size(500.0, 4.0);
+        assert_eq!(height, 8192);
+        assert!((width as f32 / height as f32 - fallback.viewport.aspect()).abs() < 0.001);
     }
 
     #[test]
@@ -194,4 +310,3 @@ mod tests {
         assert!((matrix.transform_x(x) - 0.25).abs() < 1e-6);
     }
 }
-

@@ -16,6 +16,7 @@ use crate::{Live2dError, ModelInfo};
 pub struct Moc2Adapter {
     model: Moc2RuntimeModel,
     info: ModelInfo,
+    face_height: Option<f32>,
     active_group: Option<String>,
     drag: (f32, f32),
     auto_blink: bool,
@@ -43,9 +44,11 @@ impl Moc2Adapter {
             canvas_height: canvas.height() as f32,
         };
 
+        let face_height = crate::framing::moc2_face_height(&model);
         Ok(Self {
             model,
             info,
+            face_height,
             active_group: None,
             drag: (0.0, 0.0),
             auto_blink: true,
@@ -57,6 +60,11 @@ impl Moc2Adapter {
     /// Static model facts.
     pub fn info(&self) -> &ModelInfo {
         &self.info
+    }
+
+    /// Face height measured once in the neutral pose.
+    pub fn face_height(&self) -> Option<f32> {
+        self.face_height
     }
 
     /// Current meshes.
@@ -73,7 +81,10 @@ impl Moc2Adapter {
     /// expressions, physics and pose.
     pub fn update(&mut self, delta_seconds: f32) -> bool {
         if let Some(value) = self.mouth_open.take() {
-            let _ = self.model.runtime_mut().set_parameter("PARAM_MOUTH_OPEN_Y", value);
+            let _ = self
+                .model
+                .runtime_mut()
+                .set_parameter("PARAM_MOUTH_OPEN_Y", value);
         }
         self.model.runtime_mut().set_drag(self.drag.0, self.drag.1);
         self.model.update(delta_seconds).is_some()
@@ -169,5 +180,3 @@ impl Moc2Adapter {
         &self.model
     }
 }
-
-

@@ -37,6 +37,38 @@ struct Scenario {
     completed: usize,
 }
 
+fn assert_click_regions(role: &mut Role) {
+    use pet_config::ClickRegion;
+    let size = role.window.inner_size();
+    for (x_ratio, y_ratio, expected) in [
+        (0.5, 0.2, ClickRegion::Head),
+        (0.2, 0.5, ClickRegion::UpperBodyLeft),
+        (0.5, 0.5, ClickRegion::UpperBodyCenter),
+        (0.8, 0.5, ClickRegion::UpperBodyRight),
+        (0.2, 0.8, ClickRegion::LowerBodyLeft),
+        (0.5, 0.8, ClickRegion::LowerBodyCenter),
+        (0.8, 0.8, ClickRegion::LowerBodyRight),
+    ] {
+        let x = role.bounds.min_x + role.bounds.width() * x_ratio;
+        let y = role.bounds.min_y
+            + role.bounds.height()
+                * if role.model.flips_y() {
+                    y_ratio
+                } else {
+                    1.0 - y_ratio
+                };
+        let local = (
+            (role.matrix.transform_x(x) + 1.0) * 0.5 * size.width as f32,
+            (1.0 - role.matrix.transform_y(y)) * 0.5 * size.height as f32,
+        );
+        assert_eq!(
+            role.region_at(local),
+            expected,
+            "padding moved click region"
+        );
+    }
+}
+
 impl ApplicationHandler for Scenario {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let source = PathBuf::from(std::env::var_os("BANDORI_PET_TEST_ROOT").unwrap());
@@ -65,6 +97,7 @@ impl ApplicationHandler for Scenario {
             let mut role =
                 Role::create(event_loop, &entry, &config, &paths, &cache, gpu.clone()).unwrap();
             gpu = Some(Arc::clone(role.renderer.gpu()));
+            assert_click_regions(&mut role);
             assert_eq!(
                 unsafe { GetForegroundWindow() },
                 foreground,
@@ -239,6 +272,12 @@ impl ApplicationHandler for Scenario {
             config.live2d_scale = 75;
             let dpr = role.window.scale_factor();
             role.apply_scale(&config, dpr).unwrap();
+            assert_click_regions(&mut role);
+            let size = role.window.inner_size();
+            assert_eq!(
+                (size.width, size.height),
+                role.layout.window_size(75.0, dpr)
+            );
             assert!(win32::click_through(hwnd));
             assert_eq!(unsafe { GetForegroundWindow() }, foreground);
             self.completed += 1;

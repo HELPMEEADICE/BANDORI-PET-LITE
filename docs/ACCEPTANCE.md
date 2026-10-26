@@ -199,3 +199,18 @@ $env:BANDORI_PET_ROOT = "$PWD\run"; $env:RUST_LOG = "info,pet_app=debug"
 验证：`cargo test --workspace` 为 145 passed、0 failed、7 ignored；软件后端的三个原生 UI 回归全部通过，默认 GPU 后端的菜单像素检查和真实双进程右键回归通过。新增窗口样式回归验证 winit 覆盖扩展样式后，菜单仍不携带分层标志，模型窗口仍保留自己的分层和 OBS 行为。
 
 重新构建 release 后，以 `BANDORI_PET_TEST_ROOT=target/release`、`BANDORI_UI_TEST_EXE=target/release/bandori-ui.exe`、`BANDORI_UI_TEST_BACKEND=winit-femtovg` 重跑全部三个原生 UI 回归，3 passed、0 failed；实际 release 程序也同步到 `run/`。
+
+### 2026-10-27 · 扩大动作空间并统一 moc / moc3 观感
+
+原先窗口和投影紧贴模型加载时的内容包围盒，动作伸出该范围就会被裁切；两种格式都按总高度 500 逻辑像素拟合，又让全身 moc3 的脸部和上半身显得更小。
+
+新增固定的 `ModelLayout`，将角色比例和窗口范围分别计算。moc 从 FACE 部件测量中立脸部高度，moc3 从 `.cdi3.json` 定位脸部轮廓后测量对应网格，两者在 100% 缩放、100% DPI 下统一为约 120 像素。缺少脸部元数据时采用格式比例回退；moc3 保留全身。窗口左右各增加半身参考高度 35%、上下各增加 15% 的透明留白，动作不改变缩放。创建、缩放、换装共用同一套计算，纹理尺寸上限也保持横纵比例一致。
+
+渲染与命中继续共享矩阵；七区点击改为相对模型内容包围盒计算，避免新增留白改变区域。新增原生回归在 moc / moc3 的启动和缩放后检查全部七区。
+
+验证：
+
+* `cargo test --workspace`：148 passed、0 failed、7 ignored，其中真实模型回归设置了 `BANDORI_PET_TEST_MODELS=run/models`。
+* `model_framing`：kasumi / live_default（moc）窗口 627×657，脸部 120.07 像素；anon / casual_spring_01（moc3）窗口 619×932，脸部 120.01 像素。94 组动作各采样 6 秒、20 FPS，共 11,280 帧，同时切换极限视线方向，可见网格均位于窗口内。离屏图像检查确认两者上半身比例一致，moc3 全身完整显示，四周留白充足。
+* `BANDORI_PET_TEST_ROOT=run` 下执行 `cargo test -p pet-app --test window_input --test multi_role_runtime -- --ignored --nocapture --test-threads=1`：2 passed。真实 Windows / Vulkan 窗口验证启动、动态缩放、换装、添加/移除、位置恢复、透明区穿透和不夺焦；全部七区在增加留白和缩放后仍匹配原来的内容比例。
+* `cargo build --release --bin bandori-pet --bin bandori-ui` 通过，两个程序同步到 `run/`。

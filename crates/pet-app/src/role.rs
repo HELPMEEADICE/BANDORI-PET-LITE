@@ -12,7 +12,7 @@ use pet_input::hit::{FrameSnapshot, HitStability};
 
 use pet_live2d::{ModelHandle, ModelInfo};
 use pet_render::{ModelGpu, RenderError, SceneRenderer};
-use pet_window::sizing::{content_size, fit_matrix, window_size_for_model};
+use pet_window::sizing::{content_size, ModelLayout};
 use pet_window::{placement, win32};
 use tracing::{error, info, warn};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -73,6 +73,8 @@ pub struct Role {
     pub behavior: RoleBehavior,
     /// Model-space content bounds.
     pub bounds: pet_window::sizing::Bounds,
+    /// Stable model scale and padded animation viewport.
+    pub layout: ModelLayout,
     /// Model → clip matrix.
     pub matrix: neocari::core::Matrix44,
     /// Persisted placement record.
@@ -134,6 +136,7 @@ impl Role {
         let textures = Arc::new(model.textures().to_vec());
 
         let bounds = content_size(model.meshes()).ok_or(RoleError::NoBounds)?;
+        let layout = ModelLayout::new(bounds, model.face_height(), model.format());
         let monitors = placement::monitors();
         let dpr = event_loop
             .primary_monitor()
@@ -141,7 +144,7 @@ impl Role {
             .map(|monitor| monitor.scale_factor())
             .unwrap_or(1.0);
         let scale = config.effective_scale_percent(dpr);
-        let (width, height) = window_size_for_model(bounds, scale, dpr);
+        let (width, height) = layout.window_size(scale, dpr);
         let primary = monitors.iter().find(|monitor| monitor.is_primary).cloned();
         let mut stored = entry.window_placement.clone();
         stored.width = width;
@@ -226,7 +229,7 @@ impl Role {
             )?,
         };
 
-        let matrix = fit_matrix(bounds, 1.0, model.flips_y());
+        let matrix = layout.matrix(model.flips_y());
         let model_gpu = renderer.upload_model(model.meshes(), &textures, matrix)?;
 
         let mut behavior = RoleBehavior::new(pet_util::Rng::from_entropy().next_u64());
@@ -255,6 +258,7 @@ impl Role {
             model_gpu,
             behavior,
             bounds,
+            layout,
             matrix,
             placement: stored,
             entry: entry.clone(),
@@ -343,7 +347,7 @@ impl Role {
     /// Rebuilds the window for a scale change (RebuildWindow apply level).
     pub fn apply_scale(&mut self, config: &Config, dpr: f64) -> RoleResult<()> {
         let scale = config.effective_scale_percent(dpr);
-        let (width, height) = window_size_for_model(self.bounds, scale, dpr);
+        let (width, height) = self.layout.window_size(scale, dpr);
         let (x, y, current_width, current_height) = self.window_rect().unwrap_or((
             self.base_position.0,
             self.base_position.1,
@@ -361,7 +365,7 @@ impl Role {
             .request_inner_size(PhysicalSize::new(width, height));
         self.base_position = (new_x, new_y);
         self.set_position(new_x, new_y);
-        let matrix = fit_matrix(self.bounds, 1.0, self.model.flips_y());
+        let matrix = self.layout.matrix(self.model.flips_y());
         self.matrix = matrix;
         self.model_gpu
             .set_matrix(self.renderer.gpu(), self.renderer.renderer(), matrix);
@@ -545,9 +549,7 @@ impl Role {
 
     /// Region for a local cursor position.
     ///
-    /// The 7-region split is computed from **clip space**, not model space: this
-    /// keeps the y ratio correct for both the y-up (moc3) and y-down (moc) model
-    /// spaces without a per-format branch.
+    /// The 7-region split uses content bounds, excluding transparent padding.
     pub fn region_at(&mut self, cursor: (f32, f32)) -> pet_config::ClickRegion {
         let size = self.window.inner_size();
         let snapshot = self.snapshot();
@@ -558,11 +560,14 @@ impl Role {
             .model
             .hit_test_area(point.0, point.1)
             .unwrap_or_default();
-        // Model space → clip space with the very same matrix the renderer uses.
-        let clip_x = self.matrix.transform_x(point.0);
-        let clip_y = self.matrix.transform_y(point.1);
-        let x_ratio = ((clip_x + 1.0) * 0.5).clamp(0.0, 1.0);
-        let y_ratio = ((1.0 - clip_y) * 0.5).clamp(0.0, 1.0);
+        let x_ratio = ((point.0 - self.bounds.min_x) / self.bounds.width()).clamp(0.0, 1.0);
+        let model_y_ratio = (point.1 - self.bounds.min_y) / self.bounds.height();
+        let y_ratio = if self.model.flips_y() {
+            model_y_ratio
+        } else {
+            1.0 - model_y_ratio
+        }
+        .clamp(0.0, 1.0);
         let region = pet_input::classify_region(x_ratio, y_ratio, &area);
         tracing::debug!(
             region = region.key(),
@@ -910,10 +915,11 @@ impl Role {
         let info = model.info().clone();
         let textures = Arc::new(model.textures().to_vec());
         let bounds = content_size(model.meshes()).ok_or(RoleError::NoBounds)?;
+        let layout = ModelLayout::new(bounds, model.face_height(), model.format());
         let dpr = self.window.scale_factor();
         let scale = config.effective_scale_percent(dpr);
-        let (width, height) = window_size_for_model(bounds, scale, dpr);
-        let matrix = fit_matrix(bounds, 1.0, model.flips_y());
+        let (width, height) = layout.window_size(scale, dpr);
+        let matrix = layout.matrix(model.flips_y());
         let model_gpu = self
             .renderer
             .upload_model(model.meshes(), &textures, matrix)?;
@@ -922,6 +928,7 @@ impl Role {
         self.model_gpu = model_gpu;
         self.textures = textures;
         self.bounds = bounds;
+        self.layout = layout;
         self.matrix = matrix;
         self.info = info;
         self.entry = entry.clone();
