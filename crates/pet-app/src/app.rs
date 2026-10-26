@@ -39,6 +39,8 @@ pub struct PetApp {
     tray: Option<Tray>,
     ipc: IpcHost,
     ui: UiSupervisor,
+    /// Open requests made before the settings process connects.
+    pending_settings_page: Option<SettingsPage>,
     started: Instant,
     last_frame: Instant,
     last_config_save: Instant,
@@ -107,6 +109,7 @@ impl PetApp {
             tray,
             ipc,
             ui,
+            pending_settings_page: None,
             started: Instant::now(),
             last_frame: Instant::now(),
             last_config_save: Instant::now(),
@@ -217,7 +220,12 @@ impl PetApp {
     }
 
     fn open_settings(&mut self, page: SettingsPage) {
-        self.ipc.send(&Message::OpenSettings { page });
+        if self.ipc.is_connected() {
+            self.pending_settings_page = None;
+            self.ipc.send(&Message::OpenSettings { page });
+        } else {
+            self.pending_settings_page = Some(page);
+        }
         self.ui.ensure_running();
     }
 
@@ -559,6 +567,9 @@ impl PetApp {
                     info!("settings process connected");
                     self.ui.note_connected();
                     self.send_snapshot();
+                    if let Some(page) = self.pending_settings_page.take() {
+                        self.ipc.send(&Message::OpenSettings { page });
+                    }
                 }
                 IpcEvent::Disconnected => {
                     info!("settings process disconnected");
@@ -808,6 +819,7 @@ impl PetApp {
         }
         self.persist_now();
         self.ipc.send(&Message::Quit);
+        self.ui.shutdown();
     }
 }
 
@@ -960,7 +972,6 @@ impl ApplicationHandler for PetApp {
             }
         }
         if self.quit {
-            self.save_and_exit();
             event_loop.exit();
             return;
         }
@@ -1052,4 +1063,65 @@ pub fn run(paths: Paths) -> AppResult<()> {
 /// Convenience for the About page (delegates to `pet-config`).
 pub fn about_lines(paths: &Paths, config: &Config) -> Vec<(String, String)> {
     pet_config::paths::about_lines(paths, config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pet_ipc::Connection;
+    use std::sync::mpsc::channel;
+
+    #[test]
+    fn settings_open_request_survives_a_delayed_ui_connection() {
+        let session = format!("pending-settings-{}", std::process::id());
+        let root = std::env::temp_dir().join(&session);
+        std::fs::create_dir_all(&root).unwrap();
+        let mut app = PetApp::new_with(Paths::with_root(root), &session, false).unwrap();
+        // Startup requests the model page; a later user request wins.
+        app.open_settings(SettingsPage::Model);
+        app.open_settings(SettingsPage::Display);
+
+        let pipe = pipe_name(&session);
+        let (tx, rx) = channel();
+        let client = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut connection = loop {
+                match Connection::connect(&pipe) {
+                    Ok(connection) => break connection,
+                    Err(_) if Instant::now() < deadline => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("connect: {error}"),
+                }
+            };
+            for _ in 0..3 {
+                tx.send(connection.recv().unwrap().unwrap()).unwrap();
+            }
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.pending_settings_page.is_some() && Instant::now() < deadline {
+            app.drain_ipc();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(app.pending_settings_page, None);
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Message::ConfigSnapshot { .. }
+        ));
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Message::OpenSettings {
+                page: SettingsPage::Display
+            }
+        );
+        app.open_settings(SettingsPage::Behavior);
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Message::OpenSettings {
+                page: SettingsPage::Behavior
+            }
+        );
+        client.join().unwrap();
+    }
 }

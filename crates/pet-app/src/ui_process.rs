@@ -115,12 +115,30 @@ impl UiSupervisor {
         self.ensure_running();
     }
 
-    /// Asks the child to exit.
+    /// Reaps the child after IPC Quit, terminating it if it fails to exit promptly.
     pub fn shutdown(&mut self) {
-        if let Some(child) = self.child.as_mut() {
-            let _ = child.kill();
+        self.connected = false;
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                _ => break,
+            }
         }
-        self.child = None;
+        warn!(
+            pid = child.id(),
+            "settings process did not exit; terminating it"
+        );
+        if let Err(error) = child.kill() {
+            warn!(%error, "failed to terminate settings process");
+        } else if let Err(error) = child.wait() {
+            warn!(%error, "failed to reap settings process");
+        }
     }
 }
-

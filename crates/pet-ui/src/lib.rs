@@ -39,7 +39,7 @@ struct Shared {
 /// Message sender shared by every callback.
 type Sender = Rc<dyn Fn(&Message) -> bool>;
 
-/// Runs the settings UI until the window is closed.
+/// Runs the hidden UI service until the pet process asks it to quit.
 pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
     let window = SettingsWindow::new()?;
     let radial = RadialMenu::new()?;
@@ -76,6 +76,13 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
             connection.send(message).is_ok()
         }
     });
+    {
+        let send = Rc::clone(&send);
+        window.window().on_close_requested(move || {
+            send(&Message::SettingsClosed);
+            slint::CloseRequestResponse::HideWindow
+        });
+    }
 
     // ── Character / costume lists ────────────────────────────────────────────
     let picker = picker::Picker::new(Rc::clone(&catalog), paths, Rc::clone(&send))?;
@@ -422,9 +429,15 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                     window.set_status(message.into());
                 }
                 Message::Quit => {
+                    let _ = window.hide();
                     if let Some(radial) = pump_radial.upgrade() {
                         let _ = radial.hide();
                     }
+                    if let Some(bubble) = pump_bubble.upgrade() {
+                        let _ = bubble.hide();
+                    }
+                    let _ = slint::quit_event_loop();
+                    return;
                 }
                 Message::Ready | Message::RequestSnapshot => {}
                 other => {
@@ -445,8 +458,12 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
         }
     });
 
-    let result = window.run();
+    // Showing settings is driven only by OpenSettings. Closing the last window
+    // must keep the IPC pump alive for subsequent tray/menu requests.
+    let result = slint::run_event_loop_until_quit();
+    let _ = window.hide();
     let _ = radial.hide();
+    let _ = bubble.hide();
     result.map_err(UiError::Slint)
 }
 
@@ -516,7 +533,10 @@ fn spawn_client(
                             return;
                         }
                         if quit {
-                            break;
+                            if let Ok(mut guard) = writer.lock() {
+                                *guard = None;
+                            }
+                            return;
                         }
                     }
                     Ok(None) | Err(_) => break,

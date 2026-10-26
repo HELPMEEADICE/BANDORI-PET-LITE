@@ -125,3 +125,16 @@ $env:BANDORI_PET_ROOT = "$PWD\run"; $env:RUST_LOG = "info,pet_app=debug"
 * `cargo test --workspace` 覆盖配置/IPC、旧配置读取、错开放置和角色列表选择；真实模型/GPU 回归默认忽略。
 * `BANDORI_PET_TEST_ROOT=run` 下执行 `cargo test -p pet-app --test multi_role_runtime -- --ignored --nocapture`，Windows / RTX 5080 / Vulkan 实测通过：kasumi `live_default`（moc）与 anon `casual_spring_01`（moc3）由 1 个窗口增加至 2 个，移除后为 1 个；anon 换装 `school_winter_hs_1st` 复用窗口；组合模型/缩放补丁保持窗口列表；模拟缺失模型后保存仍保留条目；重新创建应用后按 `Absolute` 恢复独立位置和不透明度。
 * 本地 anon `birthday_2024_ssr` 的旧 `.moc` 在现有解析器中会报 `expected an id string`，属于已有模型兼容性限制；此次确认加载失败条目仍能保留在配置中。
+
+### 2026-10-26 · 设置窗口的显示与退出
+
+设置进程改用 `run_event_loop_until_quit` 隐藏常驻，只在收到 `OPEN_SETTINGS` 时显示；关闭设置窗口仅隐藏并发送 `SETTINGS_CLOSED`，后续可从托盘或径向菜单重新打开。连接建立前的打开请求暂存，连接后发送，保留首次启动及缺少模型时的角色选择引导。
+
+收到 `QUIT` 后隐藏设置、径向菜单和气泡，退出 Slint 事件循环，IPC 客户端停止重连。主进程在退出回调中保存配置、发送 `QUIT` 并回收设置子进程；超过 1 秒仍未退出则终止，避免未连接或失去响应的设置进程残留。
+
+验证：
+
+* `cargo test --workspace`：131 passed、0 failed、4 ignored。
+* `cargo test -p pet-app --test ui_lifecycle -- --ignored --nocapture`：真实 Windows 设置进程验证启动及配置快照均不弹窗，关闭后继续运行并可重开，设置、径向菜单及气泡同时显示时收到 `QUIT` 后正常退出。
+* `settings_open_request_survives_a_delayed_ui_connection`：打开请求早于 IPC 连接时，连接后收到最新请求；连接后的新请求也正常送达。
+* release 双进程联调：已有 anon 模型配置时设置保持隐藏；无配置且无模型时自动打开设置；两种场景主进程正常退出后均无设置进程残留。启动后立即退出、UI 尚未连接时，1 秒兜底终止也通过验证。
