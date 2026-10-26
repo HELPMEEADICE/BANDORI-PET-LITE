@@ -521,7 +521,7 @@ export component SettingsWindow inherits Window {
                                         }
                                         if row.active : Rectangle {
                                             height: 4px; background: Colors.border; border-radius: 2px;
-                                            Rectangle { width: parent.width * (row.progress < 0 ? 0.15 : row.progress / 100); height: parent.height; background: Colors.accent; border-radius: 2px; }
+                                            Rectangle { x: 0px; width: parent.width * (row.progress < 0 ? 0.15 : row.progress / 100); height: parent.height; background: Colors.accent; border-radius: 2px; }
                                         }
                                     }
                                 }
