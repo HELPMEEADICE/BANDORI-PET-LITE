@@ -55,6 +55,8 @@ impl ApplicationHandler for Scenario {
             config.live2d_scale = 50;
             config.drag_locked = false;
             config.emotion_behavior_enabled = false;
+            config.live2d_head_tracking_enabled = true;
+            config.live2d_mutual_gaze_enabled = false;
             config.hide_live2d_model = character == "anon";
             let entry = pet_app::role::entry_for_selection(
                 character,
@@ -100,7 +102,50 @@ impl ApplicationHandler for Scenario {
                 );
             }
 
+            // Keep all tracking samples on screen, including outside the window.
+            let monitor = role.window.current_monitor().unwrap();
+            let origin = monitor.position();
+            let monitor_size = monitor.size();
+            let size = role.window.inner_size();
+            role.set_position(
+                origin.x + (monitor_size.width as i32 - size.width as i32) / 2,
+                origin.y + (monitor_size.height as i32 - size.height as i32) / 2,
+            );
             let (x, y, width, height) = role.window_rect().unwrap();
+            let (w, h) = (width as f32, height as f32);
+            // CursorLeft clears the event cache. Transparent windows receive no
+            // movement events either, so a stale cached position must not win.
+            for (local, direction, cached) in [
+                ((-32.0, -32.0), (-1.0, 1.0), None),
+                ((w + 32.0, h + 32.0), (1.0, -1.0), None),
+                (
+                    (w * 0.25, h * 0.25),
+                    (-1.0, 1.0),
+                    Some((w * 0.75, h * 0.75)),
+                ),
+            ] {
+                role.set_cursor(cached);
+                assert!(win32::set_cursor_position(
+                    x as f32 + local.0,
+                    y as f32 + local.1
+                ));
+                let commands = role.tick_behavior(1.0, 1.0 / 60.0, 0.0, None, role.center());
+                assert!(
+                    commands.iter().any(|command| matches!(
+                        command,
+                        pet_behavior::Command::SetDrag(dx, dy)
+                            if dx * direction.0 > 0.0 && dy * direction.1 > 0.0
+                    )),
+                    "{character} did not track the global cursor at {local:?}: {commands:?}"
+                );
+                assert_eq!(
+                    role.cursor_local(),
+                    cached,
+                    "tracking changed the click-event cache"
+                );
+                assert!(role.click_through, "tracking disabled mouse passthrough");
+            }
+
             let size = role.window.inner_size();
             let snapshot = role.snapshot();
             let mut hit = None;

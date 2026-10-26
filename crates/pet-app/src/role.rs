@@ -83,7 +83,7 @@ pub struct Role {
     pub textures: Arc<Vec<neocari::assets::DecodedTexture>>,
     /// Window position before any emotion displacement.
     pub base_position: (i32, i32),
-    /// Last known cursor position in local physical pixels.
+    /// Last cursor event position in local physical pixels, used for clicks.
     cursor: Option<(f32, f32)>,
     /// Active drag gesture.
     dragging: Option<DragState>,
@@ -668,7 +668,13 @@ impl Role {
         let hour = pet_util::time_of_day::local_hour();
         let motion_names = self.info.motion_groups.clone();
         let expression_names = self.info.expression_names.clone();
-        let cursor_local = self.cursor;
+        // Window events stop outside the window and while it is click-through.
+        // Sample the screen cursor every tick, keeping out-of-bounds local
+        // coordinates so head tracking still sees targets beyond the window.
+        let cursor_local = global_cursor()
+            .zip(self.window_rect())
+            .map(|((cx, cy), (x, y, ..))| (cx - x as f32, cy - y as f32))
+            .or(self.cursor);
         let context = BehaviorContext {
             now,
             dt,

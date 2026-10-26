@@ -51,7 +51,7 @@ pub struct BehaviorContext<'a> {
     pub now: f64,
     /// Frame delta in seconds.
     pub dt: f32,
-    /// Cursor position in this window's physical pixel space, if it is nearby.
+    /// Cursor position relative to this window in physical pixels; may be outside its bounds.
     pub cursor_local: Option<(f32, f32)>,
     /// Window size in physical pixels.
     pub surface: (u32, u32),
