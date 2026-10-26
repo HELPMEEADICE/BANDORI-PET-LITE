@@ -132,6 +132,16 @@ impl ModelHandle {
         }
     }
 
+    /// Transfers the original CPU pixels after upload so the caller can keep
+    /// only the alpha channel for hit testing. Animation remains usable;
+    /// `textures()` is empty afterwards. Model info retains the texture count.
+    pub fn take_textures(&mut self) -> Vec<DecodedTexture> {
+        match self {
+            ModelHandle::Moc2(adapter) => adapter.take_textures(),
+            ModelHandle::Moc3(adapter) => adapter.take_textures(),
+        }
+    }
+
     /// Advances the model by `delta_seconds`; `false` means the mesh rebuild failed.
     pub fn update(&mut self, delta_seconds: f32) -> bool {
         match self {

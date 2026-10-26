@@ -167,6 +167,11 @@ impl Moc3Adapter {
         self.model.textures()
     }
 
+    /// Transfers CPU texture pixels out of the runtime after GPU upload.
+    pub fn take_textures(&mut self) -> Vec<DecodedTexture> {
+        self.model.take_textures()
+    }
+
     /// Advances one frame (see the module docs for the exact order).
     pub fn update(&mut self, delta_seconds: f32) -> bool {
         let delta = delta_seconds.clamp(0.0, 0.25);

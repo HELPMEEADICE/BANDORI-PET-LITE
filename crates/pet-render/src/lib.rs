@@ -106,6 +106,10 @@ impl Gpu {
             label: Some("bandori-pet.device"),
             required_features: wgpu::Features::empty(),
             required_limits: wgpu::Limits::default(),
+            // Desktop pets use small, mostly persistent resources. Avoid the
+            // large allocation blocks intended for games; texture dimensions,
+            // render precision and frame scheduling stay unchanged.
+            memory_hints: wgpu::MemoryHints::MemoryUsage,
             ..Default::default()
         }))
         .map_err(|error| RenderError::Device(error.to_string()))?;

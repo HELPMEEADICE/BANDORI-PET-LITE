@@ -48,6 +48,22 @@ fn real_models_share_face_scale_and_have_room_for_motions() {
             )
             .unwrap();
         }
+        // A desktop role uploads the original pixels, then retains only alpha.
+        // Both runtimes must keep animating after their CPU textures are gone.
+        let texture_count = model.info().texture_count;
+        let textures = model.take_textures();
+        assert_eq!(textures.len(), texture_count);
+        let rgba_bytes: usize = textures.iter().map(|texture| texture.rgba().len()).sum();
+        let alpha_bytes: usize = textures
+            .into_iter()
+            .map(pet_input::hit::AlphaTexture::from)
+            .map(|texture| texture.byte_len())
+            .sum();
+        assert_eq!(rgba_bytes, alpha_bytes * 4);
+        assert!(model.textures().is_empty());
+        assert!(model.take_textures().is_empty());
+        assert_eq!(model.info().texture_count, texture_count);
+        eprintln!("{spec}: CPU texture storage {rgba_bytes} RGBA bytes -> {alpha_bytes} alpha bytes (previous desktop code also held a full RGBA clone)");
         let groups = model.info().motion_groups.clone();
         for group in groups {
             model.stop_motions();

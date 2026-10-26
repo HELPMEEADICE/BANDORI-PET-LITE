@@ -18,6 +18,41 @@ use neocari::moc3::Moc3DrawableMesh;
 
 use crate::region::Bounds;
 
+/// Original-resolution, lossless alpha used by CPU hit testing. RGB pixels are
+/// needed only for GPU upload and are not retained by the interaction code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AlphaTexture {
+    width: u32,
+    height: u32,
+    alpha: Vec<u8>,
+}
+
+impl AlphaTexture {
+    /// Copies every original alpha byte, without resampling or thresholding.
+    pub fn from_texture(texture: &DecodedTexture) -> Self {
+        Self {
+            width: texture.width(),
+            height: texture.height(),
+            alpha: texture
+                .rgba()
+                .chunks_exact(4)
+                .map(|pixel| pixel[3])
+                .collect(),
+        }
+    }
+
+    /// Bytes retained for hit testing (one byte per original pixel).
+    pub fn byte_len(&self) -> usize {
+        self.alpha.len()
+    }
+}
+
+impl From<DecodedTexture> for AlphaTexture {
+    fn from(texture: DecodedTexture) -> Self {
+        Self::from_texture(&texture)
+    }
+}
+
 /// One vertex of a hit-testable triangle.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HitVertex {
@@ -51,8 +86,8 @@ pub struct FrameSnapshot {
     pub content_bounds: Bounds,
     /// Drawables in model order.
     pub drawables: Vec<HitDrawable>,
-    /// Decoded textures (shared, never mutated).
-    pub textures: Arc<Vec<DecodedTexture>>,
+    /// Original alpha channels (shared, never mutated).
+    pub textures: Arc<Vec<AlphaTexture>>,
 }
 
 /// Result of one hit test.
@@ -70,7 +105,7 @@ impl FrameSnapshot {
     /// Builds a snapshot from the meshes of the last rendered frame.
     pub fn new(
         meshes: &[Moc3DrawableMesh],
-        textures: Arc<Vec<DecodedTexture>>,
+        textures: Arc<Vec<AlphaTexture>>,
         matrix: Matrix44,
     ) -> Self {
         let mut drawables = Vec::with_capacity(meshes.len());
@@ -92,7 +127,10 @@ impl FrameSnapshot {
                             max_x: bounds.max_x.max(position[0]),
                             max_y: bounds.max_y.max(position[1]),
                         },
-                        None => Bounds::from_corners((position[0], position[1]), (position[0], position[1])),
+                        None => Bounds::from_corners(
+                            (position[0], position[1]),
+                            (position[0], position[1]),
+                        ),
                     });
                     HitVertex {
                         position,
@@ -230,16 +268,16 @@ fn barycentric(
 }
 
 /// Nearest-neighbour alpha sample at normalized UV coordinates.
-fn sample_alpha(texture: &DecodedTexture, uv: [f32; 2]) -> u8 {
-    let width = texture.width();
-    let height = texture.height();
+fn sample_alpha(texture: &AlphaTexture, uv: [f32; 2]) -> u8 {
+    let width = texture.width;
+    let height = texture.height;
     if width == 0 || height == 0 {
         return 255;
     }
     let x = (uv[0].clamp(0.0, 1.0) * (width - 1) as f32).round() as u32;
     let y = (uv[1].clamp(0.0, 1.0) * (height - 1) as f32).round() as u32;
-    let index = ((y * width + x) * 4 + 3) as usize;
-    texture.rgba().get(index).copied().unwrap_or(255)
+    let index = (y * width + x) as usize;
+    texture.alpha.get(index).copied().unwrap_or(255)
 }
 
 /// Stability compensation for repeated hit tests.
@@ -261,7 +299,13 @@ impl HitStability {
     }
 
     /// Grace rule with an explicit window (the passthrough poller uses 80 ms).
-    pub fn confirm_with(&mut self, hit: bool, cursor: (f32, f32), now_ms: u64, grace_ms: u64) -> bool {
+    pub fn confirm_with(
+        &mut self,
+        hit: bool,
+        cursor: (f32, f32),
+        now_ms: u64,
+        grace_ms: u64,
+    ) -> bool {
         if hit {
             self.last_hit = Some((cursor, now_ms));
             return true;
@@ -307,8 +351,8 @@ mod tests {
         )
     }
 
-    fn opaque_texture() -> Arc<Vec<DecodedTexture>> {
-        Arc::new(vec![DecodedTexture::new(2, 2, vec![255; 16])])
+    fn opaque_texture() -> Arc<Vec<AlphaTexture>> {
+        Arc::new(vec![DecodedTexture::new(2, 2, vec![255; 16]).into()])
     }
 
     #[test]
@@ -330,11 +374,75 @@ mod tests {
     #[test]
     fn transparent_pixels_do_not_hit() {
         let meshes = vec![quad_mesh(1.0)];
-        let transparent = Arc::new(vec![DecodedTexture::new(2, 2, vec![0; 16])]);
+        let transparent = Arc::new(vec![DecodedTexture::new(2, 2, vec![0; 16]).into()]);
         let snapshot = FrameSnapshot::new(&meshes, transparent, Matrix44::identity());
         assert!(!snapshot.hit_test((50.0, 50.0), (100, 100), 8).hit);
         // Lowering the threshold below 0 is impossible, so alpha 0 never hits.
         assert!(!snapshot.hit_test((50.0, 50.0), (100, 100), 0).hit);
+    }
+
+    #[test]
+    fn alpha_storage_preserves_every_byte_and_uv_sample() {
+        let rgba: Vec<u8> = (0..=255u8)
+            .flat_map(|alpha| [alpha.wrapping_add(1), 123, 45, alpha])
+            .collect();
+        let source = DecodedTexture::new(16, 16, rgba);
+        let texture = AlphaTexture::from_texture(&source);
+        assert_eq!(texture.byte_len(), source.rgba().len() / 4);
+        assert_eq!(texture.alpha, (0..=255u8).collect::<Vec<_>>());
+        // Cover pixel centers, edges, clamping and intermediate UVs using the
+        // previous RGBA sampler as the reference.
+        for y in -10..=110 {
+            for x in -10..=110 {
+                let uv = [x as f32 / 100.0, y as f32 / 100.0];
+                let px = (uv[0].clamp(0.0, 1.0) * 15.0).round() as usize;
+                let py = (uv[1].clamp(0.0, 1.0) * 15.0).round() as usize;
+                assert_eq!(
+                    sample_alpha(&texture, uv),
+                    source.rgba()[(py * 16 + px) * 4 + 3]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn all_alpha_thresholds_and_opacities_keep_the_same_hit_result() {
+        let mut snapshot =
+            FrameSnapshot::new(&[quad_mesh(1.0)], opaque_texture(), Matrix44::identity());
+        for alpha in 0..=255u8 {
+            snapshot.textures = Arc::new(vec![
+                DecodedTexture::new(1, 1, vec![19, 37, 61, alpha]).into()
+            ]);
+            for opacity in [0.0, 0.01, 0.25, 0.5, 0.75, 1.0] {
+                snapshot.drawables[0].opacity = opacity;
+                for threshold in 0..=255u8 {
+                    let expected = (alpha as f32 / 255.0 * opacity) * 255.0 > threshold as f32;
+                    assert_eq!(
+                        snapshot.hit_test((50.0, 50.0), (100, 100), threshold).hit,
+                        expected,
+                        "alpha={alpha} opacity={opacity} threshold={threshold}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn snapshots_share_alpha_and_empty_textures_keep_the_fallback() {
+        let textures = opaque_texture();
+        let snapshot = FrameSnapshot::new(
+            &[quad_mesh(1.0)],
+            Arc::clone(&textures),
+            Matrix44::identity(),
+        );
+        assert!(Arc::ptr_eq(&snapshot.textures, &textures));
+        assert_eq!(
+            sample_alpha(
+                &AlphaTexture::from(DecodedTexture::new(0, 0, vec![])),
+                [0.5, 0.5]
+            ),
+            255
+        );
     }
 
     #[test]

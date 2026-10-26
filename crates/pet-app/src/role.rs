@@ -8,7 +8,7 @@ use pet_assets::catalog::CatalogCostume;
 use pet_assets::ModelCache;
 use pet_behavior::{BehaviorContext, Command, RoleBehavior, RoleBehaviorConfig, WindowMotionKind};
 use pet_config::{Config, ModelEntry, Placement};
-use pet_input::hit::{FrameSnapshot, HitStability};
+use pet_input::hit::{AlphaTexture, FrameSnapshot, HitStability};
 
 use pet_live2d::{ModelHandle, ModelInfo};
 use pet_render::{ModelGpu, RenderError, SceneRenderer};
@@ -81,8 +81,8 @@ pub struct Role {
     pub placement: Placement,
     /// Config entry this role was created from.
     pub entry: ModelEntry,
-    /// Cached decoded textures for hit testing.
-    pub textures: Arc<Vec<neocari::assets::DecodedTexture>>,
+    /// Lossless original-resolution alpha channels for hit testing.
+    pub textures: Arc<Vec<AlphaTexture>>,
     /// Window position before any emotion displacement.
     pub base_position: (i32, i32),
     /// Last cursor event position in local physical pixels, used for clicks.
@@ -133,7 +133,6 @@ impl Role {
         let resolved = cache.resolve(&entry.path)?;
         let mut model = ModelHandle::load(&resolved.model_path)?;
         let info = model.info().clone();
-        let textures = Arc::new(model.textures().to_vec());
 
         let bounds = content_size(model.meshes()).ok_or(RoleError::NoBounds)?;
         let layout = ModelLayout::new(bounds, model.face_height(), model.format());
@@ -230,7 +229,8 @@ impl Role {
         };
 
         let matrix = layout.matrix(model.flips_y());
-        let model_gpu = renderer.upload_model(model.meshes(), &textures, matrix)?;
+        let model_gpu = renderer.upload_model(model.meshes(), model.textures(), matrix)?;
+        let textures = Self::take_hit_textures(&mut model);
 
         let mut behavior = RoleBehavior::new(pet_util::Rng::from_entropy().next_u64());
         let mut behavior_config = RoleBehaviorConfig::from(config);
@@ -911,9 +911,8 @@ impl Role {
         config: &Config,
     ) -> RoleResult<()> {
         let resolved = cache.resolve(&entry.path)?;
-        let model = ModelHandle::load(&resolved.model_path)?;
+        let mut model = ModelHandle::load(&resolved.model_path)?;
         let info = model.info().clone();
-        let textures = Arc::new(model.textures().to_vec());
         let bounds = content_size(model.meshes()).ok_or(RoleError::NoBounds)?;
         let layout = ModelLayout::new(bounds, model.face_height(), model.format());
         let dpr = self.window.scale_factor();
@@ -922,7 +921,8 @@ impl Role {
         let matrix = layout.matrix(model.flips_y());
         let model_gpu = self
             .renderer
-            .upload_model(model.meshes(), &textures, matrix)?;
+            .upload_model(model.meshes(), model.textures(), matrix)?;
+        let textures = Self::take_hit_textures(&mut model);
 
         self.model = model;
         self.model_gpu = model_gpu;
@@ -959,6 +959,23 @@ impl Role {
         self.record_placement();
         info!(character = %entry.character, costume = %entry.costume, "model hot-swapped");
         Ok(())
+    }
+
+    fn take_hit_textures(model: &mut ModelHandle) -> Arc<Vec<AlphaTexture>> {
+        // Consume one texture at a time: release its RGBA allocation as soon as
+        // its alpha has been extracted. The GPU owns the unchanged full pixels.
+        let textures: Vec<_> = model
+            .take_textures()
+            .into_iter()
+            .map(AlphaTexture::from)
+            .collect();
+        let alpha_bytes: usize = textures.iter().map(AlphaTexture::byte_len).sum();
+        info!(
+            alpha_bytes,
+            released_rgba_bytes = alpha_bytes * 4,
+            "CPU textures reduced to lossless alpha"
+        );
+        Arc::new(textures)
     }
 
     /// Applies the OBS capture style without recreating the window.
