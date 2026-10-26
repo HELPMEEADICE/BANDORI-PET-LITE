@@ -42,7 +42,7 @@
 ## 复现方式
 
 ```powershell
-cargo test --workspace                                  # 114 个测试
+cargo test --workspace                                  # 144 个测试（另有 6 个 ignored）
 pwsh -File scripts/run-dev.ps1 -ModelsFrom <你的 models 目录>
 $env:BANDORI_PET_ROOT = "$PWD\run"; $env:RUST_LOG = "info,pet_app=debug"
 .\run\bandori-pet.exe
@@ -55,6 +55,40 @@ $env:BANDORI_PET_ROOT = "$PWD\run"; $env:RUST_LOG = "info,pet_app=debug"
 
 
 ## 修复记录
+
+### 2026-10-26 · Cubism 5 服装的空裁剪槽（-1）让整件服装加载失败
+
+现象：切到 `hotaru` / `casual_spring_01` 时角色窗口建不起来，设置窗收到：
+
+```
+无法加载角色 hotaru 的服装 casual_spring_01：render error: clipping setup failed: InvalidMaskDrawableIndex { drawable_index: -1 }
+```
+
+根因：这件服装是 Cubism 5 的 `.moc3`（版本 5，356 个 art mesh）。被多重遮罩裁剪的三个 drawable 的 mask 列表带着 `-1` 空槽（导出/转换留下的占位），全模型 100 个 mask 槽里有 9 个 `-1`：
+
+| drawable | 原始 mask 槽 | 有效槽 |
+|---|---|---|
+| ArtMesh549 | `[-1,-1,68,-1,-1,105,-1,-1,90,91,92,93,94]` | `[68,105,90,91,92,93,94]` |
+| ArtMesh572 | `[68,-1,105,-1,90,91,92,93,94]` | `[68,105,90,91,92,93,94]` |
+| ArtMesh433 | `[-1,189]` | `[189]` |
+
+`vendor/neocari` 把这串下标原样交给裁剪计划，`create_clipping_resources` 用 `usize::try_from(-1)` 转换失败，整件服装在 `ModelGpu::new` 阶段被拒绝。只有这一件服装受影响：同一档案的 `live_01`、`child_casual_spring_01_still` 没有空槽。
+
+参考实现（`../Project/Rust/Live2D-v2-Lua/live2d/cubism3/opengl_renderer.lua` 的 `draw_clipped_mesh_group`）用 `meshes[mask_idx + 1]` 取遮罩网格：`-1` 落到 Lua 的 0 下标得到 `nil`，被直接跳过，其余遮罩照常进 stencil。
+
+修复（`vendor/neocari`）：
+
+* 新增 `moc3::drawable::renderable_masks()`：丢掉负数槽与 `>= drawable 数` 的槽，保留原顺序；
+* `build_moc3_drawable_mesh` 用它清洗 `art_mesh_masks`；只剩空槽的 drawable 变成无遮罩（空列表），不再进入裁剪计划；
+* `Moc3DrawableMesh::from_parts_with_render_order` 同样丢负数槽，手工建网格也不会把 `-1` 带进裁剪；
+* 全部下标有效的模型，mask 列表逐项不变；moc2 路径未改。
+
+验证：
+
+* `moc3::drawable::tests::drawable_mesh_drops_negative_mask_slots`、`moc3_art_meshes::moc3_drawable_mesh::drops_empty_and_out_of_range_mask_slots` 锁定 `-1`/越界槽被丢弃、空槽 drawable 渲染为无遮罩；
+* `cargo test --workspace`：144 passed、0 failed、6 ignored；`vendor/neocari` 自身 `cargo test`：192 passed、0 failed；
+* `hotaru` / `casual_spring_01` 离屏预览（384×768，RTX 5080 / Vulkan）正常出图：可见像素 164,165（55.7%），包围盒 (14,21)–(370,747)，四角 alpha=0；修复前同一路径直接返回上述错误；
+* `bandori-pet.exe` 实机（`target/release/config.json` 原本就停在 `hotaru` / `casual_spring_01`）：`role ready ms≈1.2s format=Moc3 motions=66 expressions=46`，259×750 窗口，两次 6–8 秒运行均无 `frame failed`；同一档案的另外两套服装（`live_01`、`child_casual_spring_01_still`）的 moc3 没有空槽。
 
 ### 2026-10-26 · 透明区阻挡鼠标、任务栏按钮与桌宠夺焦
 

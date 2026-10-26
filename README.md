@@ -63,7 +63,7 @@ run/                        本地联调目录（可随时删；scripts/run-dev.
 
 ```powershell
 cargo build --release --bin bandori-pet --bin bandori-ui
-cargo test --workspace          # 114 个单元/集成测试
+cargo test --workspace          # 144 个单元/集成测试（另有 6 个需真实模型/GPU 的 ignored）
 ```
 
 产物：`target/release/bandori-pet.exe`、`target/release/bandori-ui.exe`。
