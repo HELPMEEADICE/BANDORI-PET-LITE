@@ -17,6 +17,7 @@ members = [
     "crates/pet-ui",
     "crates/pet-util",
     "crates/pet-app",
+    "crates/bandori-pet",
 ]
 
 [workspace.package]

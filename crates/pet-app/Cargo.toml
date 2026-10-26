@@ -7,10 +7,6 @@ license.workspace = true
 description = "bandori-pet-lite desktop pet process and settings UI host"
 
 [[bin]]
-name = "bandori-pet"
-path = "src/bin/bandori_pet.rs"
-
-[[bin]]
 name = "bandori-ui"
 path = "src/bin/bandori_ui.rs"
 
@@ -48,8 +44,3 @@ pollster.workspace = true
 tempfile.workspace = true
 zstd.workspace = true
 tar.workspace = true
-
-[build-dependencies]
-winresource = "0.1.31"
-
-
