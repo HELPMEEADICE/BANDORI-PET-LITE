@@ -1,0 +1,4 @@
+[submodule "vendor/neocari"]
+	path = vendor/neocari
+	url = https://github.com/HELPMEEADICE/Neocari.git
+	branch = master
