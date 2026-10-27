@@ -48,6 +48,7 @@ type Sender = Rc<dyn Fn(&Message) -> bool>;
 pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
     let creating_popup = radial::initialize_backend()?;
     let window = SettingsWindow::new()?;
+    window.set_obs_supported(cfg!(windows));
     creating_popup.set(true);
     let radial = RadialMenu::new()?;
     // Slint creates its window adapter lazily. Capture the popup attributes

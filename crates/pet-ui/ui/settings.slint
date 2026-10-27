@@ -139,6 +139,7 @@ export component SettingsWindow inherits Window {
     in-out property <bool> random-actions: false;
     in-out property <bool> emotion: false;
     in-out property <bool> obs: false;
+    in property <bool> obs-supported: true;
     in-out property <bool> topmost: false;
     in-out property <bool> autostart: false;
     in-out property <bool> hide-model: false;
@@ -490,7 +491,7 @@ export component SettingsWindow inherits Window {
                                         toggled(value) => { root.topmost = value; root.options-dirty = true; }
                                     }
 
-                                    ToggleRow {
+                                    if root.obs-supported: ToggleRow {
                                         text: "OBS游戏采集兼容";
                                         checked: root.obs;
                                         toggled(value) => { root.obs = value; root.options-dirty = true; }

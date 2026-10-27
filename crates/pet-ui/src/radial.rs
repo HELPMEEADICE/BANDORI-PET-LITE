@@ -1,7 +1,9 @@
 //! Animated popup and its native circular input region. Transparent gaps are
 //! excluded from the HWND, so input reaches windows in other processes too.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
+#[cfg(any(windows, test))]
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -22,7 +24,21 @@ const HIDE_MS: f32 = 120.;
 pub(crate) fn initialize_backend() -> Result<Rc<Cell<bool>>, slint::PlatformError> {
     let creating_popup = Rc::new(Cell::new(false));
     let popup = Rc::clone(&creating_popup);
-    slint::BackendSelector::new()
+    let backend = slint::BackendSelector::new();
+    #[cfg(target_os = "macos")]
+    let backend = {
+        use slint::winit_030::winit::platform::macos::{
+            ActivationPolicy, EventLoopBuilderExtMacOS,
+        };
+        let mut builder = slint::winit_030::winit::event_loop::EventLoop::<
+            slint::winit_030::SlintEvent,
+        >::with_user_event();
+        builder
+            .with_activation_policy(ActivationPolicy::Accessory)
+            .with_activate_ignoring_other_apps(false);
+        backend.with_winit_event_loop_builder(builder)
+    };
+    backend
         .with_winit_window_attributes_hook(move |attributes| {
             if !popup.get() {
                 return attributes;
@@ -37,6 +53,13 @@ pub(crate) fn initialize_backend() -> Result<Rc<Cell<bool>>, slint::PlatformErro
                 attributes
                     .with_skip_taskbar(true)
                     .with_undecorated_shadow(false)
+            };
+            #[cfg(target_os = "macos")]
+            let attributes = {
+                use slint::winit_030::winit::platform::macos::WindowAttributesExtMacOS;
+                attributes
+                    .with_has_shadow(false)
+                    .with_accepts_first_mouse(true)
             };
             attributes
         })
@@ -233,14 +256,25 @@ impl Controller {
     fn update_native(&self, menu: &RadialMenu) {
         #[cfg(windows)]
         self.native.update(menu);
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        menu.window().with_winit_window(|window| {
+            pet_window::macos::apply_overlay_style(window);
+            let outside = macos_outside(menu, window);
+            let _ = window.set_cursor_hittest(!outside);
+        });
+        #[cfg(not(any(windows, target_os = "macos")))]
         let _ = menu;
     }
 
     fn outside(&self, menu: &RadialMenu) -> bool {
         #[cfg(windows)]
         return self.native.outside(menu);
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        return menu
+            .window()
+            .with_winit_window(|window| macos_outside(menu, window))
+            .unwrap_or(false);
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = menu;
             false
@@ -258,7 +292,11 @@ fn mouse_down() -> bool {
             .iter()
             .any(|key| unsafe { GetAsyncKeyState(key.0 as i32) < 0 })
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        pet_window::macos::mouse_down()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         false
     }
@@ -272,6 +310,7 @@ fn bounded_position(center: (i32, i32), size: i32, work: [i32; 4]) -> (i32, i32)
 }
 
 fn place(menu: &RadialMenu, x: i32, y: i32) {
+    #[cfg(not(target_os = "macos"))]
     let scale = menu
         .window()
         .with_winit_window(|window| {
@@ -289,8 +328,32 @@ fn place(menu: &RadialMenu, x: i32, y: i32) {
         })
         .flatten()
         .unwrap_or_else(|| menu.window().scale_factor());
+    #[cfg(target_os = "macos")]
+    let scale = menu
+        .window()
+        .with_winit_window(|window| {
+            window
+                .available_monitors()
+                .find(|monitor| {
+                    let scale = monitor.scale_factor();
+                    let origin = monitor.position().to_logical::<f64>(scale);
+                    let size = monitor.size().to_logical::<f64>(scale);
+                    x as f64 >= origin.x
+                        && y as f64 >= origin.y
+                        && (x as f64) < origin.x + size.width
+                        && (y as f64) < origin.y + size.height
+                })
+                .map(|monitor| monitor.scale_factor() as f32)
+        })
+        .flatten()
+        .unwrap_or_else(|| menu.window().scale_factor());
+    #[cfg(target_os = "macos")]
+    let (x, y) = (
+        (x as f32 * scale).round() as i32,
+        (y as f32 * scale).round() as i32,
+    );
     let size = (SIZE * scale).round() as i32;
-    let monitors = pet_window::placement::monitors();
+    let monitors = pet_window::placement::monitors_for_scale(scale as f64);
     let monitor = monitors
         .iter()
         .find(|monitor| {
@@ -301,10 +364,60 @@ fn place(menu: &RadialMenu, x: i32, y: i32) {
     let position = monitor
         .map(|monitor| bounded_position((x, y), size, monitor.work))
         .unwrap_or((x - size / 2, y - size / 2));
-    menu.window()
-        .set_position(slint::PhysicalPosition::new(position.0, position.1));
-    menu.window()
-        .set_size(slint::PhysicalSize::new(size as u32, size as u32));
+    #[cfg(not(target_os = "macos"))]
+    {
+        menu.window()
+            .set_position(slint::PhysicalPosition::new(position.0, position.1));
+        menu.window()
+            .set_size(slint::PhysicalSize::new(size as u32, size as u32));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        menu.window().set_position(slint::LogicalPosition::new(
+            position.0 as f32 / scale,
+            position.1 as f32 / scale,
+        ));
+        menu.window().set_size(slint::LogicalSize::new(SIZE, SIZE));
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_outside(menu: &RadialMenu, window: &slint::winit_030::winit::window::Window) -> bool {
+    let Some((x, y)) = pet_window::macos::cursor_position(window) else {
+        return false;
+    };
+    let Ok(position) = window.outer_position() else {
+        return false;
+    };
+    let size = window.inner_size();
+    let scale = window.scale_factor() as f32;
+    let x = (x - position.x as f32 - size.width as f32 / 2.) / scale;
+    let y = (y - position.y as f32 - size.height as f32 / 2.) / scale;
+    !inside_circles(
+        x,
+        y,
+        menu.get_reveal(),
+        menu.get_spread(),
+        menu.get_items()
+            .iter()
+            .map(|item| (item.offset_x, item.offset_y)),
+    )
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn inside_circles(
+    x: f32,
+    y: f32,
+    reveal: f32,
+    spread: f32,
+    items: impl Iterator<Item = (f32, f32)>,
+) -> bool {
+    reveal > 0.001
+        && (x * x + y * y <= (HUB_RADIUS * (0.72 + 0.28 * reveal)).powi(2)
+            || items.into_iter().any(|(offset_x, offset_y)| {
+                (x - offset_x * RADIUS * spread).powi(2) + (y - offset_y * RADIUS * spread).powi(2)
+                    <= ITEM_RADIUS.powi(2)
+            }))
 }
 
 #[cfg(windows)]
@@ -423,6 +536,16 @@ mod native {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn popup_transparent_gaps_do_not_intercept_clicks() {
+        let items = [(0., -1.), (1., 0.), (0., 1.), (-1., 0.)];
+        let inside = |x, y, reveal| super::inside_circles(x, y, reveal, 1., items.into_iter());
+        assert!(inside(0., 0., 1.));
+        assert!(inside(0., -110., 1.));
+        assert!(!inside(70., 70., 1.));
+        assert!(!inside(180., 180., 1.));
+        assert!(!inside(0., 0., 0.));
+    }
     use super::*;
 
     #[test]

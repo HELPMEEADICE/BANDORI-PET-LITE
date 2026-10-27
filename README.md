@@ -1,12 +1,16 @@
 # BANDORI-PET-LITE
 
-把 BanG Dream! 的 Live2D 角色放到 Windows 桌面上。你可以拖动角色、点击不同部位触发动作，也可以同时放上多个角色，给他们各自换装。
+把 BanG Dream! 的 Live2D 角色放到 Windows 或 macOS 桌面上。你可以拖动角色、点击不同部位触发动作，也可以同时放上多个角色，给他们各自换装。
 
 项目使用 Rust 和 [Neocari](https://github.com/HELPMEEADICE/Neocari) 构建，支持 Cubism 2 的 `.moc` 和 Cubism 3/4/5 的 `.moc3` 模型。本仓库不包含模型文件；可以在程序里下载，也可以导入已有的模型包。
 
 ## 开始使用
 
-需要 Windows 10 或 11，以及支持 Vulkan 或 DirectX 12 的显卡。将 `bandori-pet.exe` 和 `bandori-ui.exe` 放在同一个目录，运行 `bandori-pet.exe` 即可。首次启动时，如果没有找到模型，程序会打开「模型下载与更新」页面；下载喜欢的角色后就可以选择服装了。
+Windows 需要 Windows 10 或 11，以及支持 Vulkan 或 DirectX 12 的显卡。将 `bandori-pet.exe` 和 `bandori-ui.exe` 放在同一个目录，运行 `bandori-pet.exe` 即可。
+
+macOS 需要 macOS 12 或更新版本和支持 Metal 的显卡，支持 Apple Silicon 与 Intel。将 `BANDORI-PET-LITE.app` 移到「应用程序」后打开，通过菜单栏图标进入设置或退出。源码打包的应用使用临时签名，没有 Apple 公证；若系统拦截，按系统提示在「系统设置 → 隐私与安全性」中允许打开。
+
+首次启动时，如果没有找到模型，程序会打开「模型下载与更新」页面；下载喜欢的角色后就可以选择服装了。
 
 也可以提前把模型包放进运行目录下的 `models/`。模型包为 `.zst` 格式的 tar 归档，每套服装占一个顶层目录，包含 `model.json` 或 `*.model3.json`。角色和服装名称使用内置目录；如有需要，也可以在运行目录的 `assets/` 下提供 `band.json` 和 `outfit.json`。
 
@@ -25,7 +29,7 @@
 
 模型来自 ModelScope 的 `HELPMEEADICE/BanG-Dream-Live2D` 数据集。程序会先校验下载的归档，再替换已有文件；下载失败或取消时会保留原来的模型。完成后列表会自动刷新，正在使用的角色也会重新加载。
 
-设置保存在运行目录的 `config.json` 中。模型暂时缺失或加载失败时，程序会保留对应的角色配置，方便之后恢复。
+Windows 设置保存在运行目录的 `config.json` 中。macOS 的配置、模型和日志保存在 `~/Library/Application Support/BandoriPetLite/`，解压缓存保存在 `~/Library/Caches/BandoriPetLite/cache/`；应用包内只放程序和内置资源，升级应用不会覆盖这些数据。模型暂时缺失或加载失败时，程序会保留对应的角色配置，方便之后恢复。
 
 ## 从源码构建
 
@@ -37,6 +41,25 @@ cargo test --workspace
 ```
 
 构建后的程序位于 `target/release/`。把两个 exe 放到同一个运行目录即可启动。
+
+### macOS 构建与打包
+
+安装 Rust stable 和 Xcode 命令行工具（`xcode-select --install`），然后运行：
+
+```bash
+git submodule update --init --recursive
+cargo build --release --bin bandori-pet --bin bandori-ui --locked
+cargo test --workspace --locked
+bash scripts/package-macos.sh --skip-build
+```
+
+脚本会在 `dist/macos-<架构>-release/` 中生成 `.app` 和可分享的 `.zip`；也可以直接运行 `bash scripts/package-macos.sh` 完成构建和打包。脚本包含两份可执行文件、内置目录、应用图标和许可文件，并执行临时签名及签名校验。正式对外发布时需要另外使用 Developer ID 签名并提交 Apple 公证。
+
+开发时可直接运行 `cargo run --bin bandori-pet`，同时确保同一构建目录中已有 `bandori-ui`。`BANDORI_PET_ROOT` 可以覆盖数据目录，两个程序仍从同一可执行文件目录启动。macOS 的登录启动通过用户 `~/Library/LaunchAgents/io.github.bandori-pet-lite.plist` 配置，在下一次登录时生效；启用前应先将应用移动到固定位置。
+
+macOS 使用 Metal、AppKit 窗口和菜单栏入口；「OBS 采集兼容」是 Windows 的窗口样式选项，在 macOS 上不改变行为。macOS 的真机验收项目见 [macOS 支持说明](docs/MACOS.md)。
+
+### Windows 开发运行
 
 如果本地已经有兼容的模型目录，可以用开发脚本准备 `run/` 并启动：
 
@@ -53,6 +76,7 @@ $env:BANDORI_PET_ROOT = "$PWD\run"
 每次 push、Pull Request 和手动触发都会运行 [GitHub Actions CI](.github/workflows/ci.yml)：
 
 - Rust：`cargo fmt` 格式检查，以及 Windows 上整个 workspace 的 `cargo check`、Clippy（告警视为错误）、两个程序的构建、单元与集成测试、文档测试和文档生成检查。
+- macOS：Apple Silicon（`macos-15`）和 Intel（`macos-15-intel`）分别执行 workspace 检查、Clippy、单元与集成测试、文档测试，以及 `.app` 构建、打包和签名校验；产物以 ZIP 上传到 Actions artifacts。
 - Slint：使用与 `Cargo.lock` 中编译器版本一致的 `slint-lsp` 检查所有已跟踪 `.slint` 文件的语法与格式；Windows 构建还会通过 `pet-ui/build.rs` 检查导入、类型、绑定和资源。
 - 工作流：使用 actionlint 检查 GitHub Actions 配置。
 
@@ -78,7 +102,7 @@ slint-lsp format -i @slintFiles
 
 ## 项目结构与开发资料
 
-桌宠和设置窗口分别运行在 `bandori-pet` 与 `bandori-ui` 两个进程中，通过命名管道通信。主要代码位于 `crates/`：`pet-app` 负责桌宠和托盘，`pet-ui` 负责设置界面，其他 crate 分别处理模型、渲染、交互、行为和配置。
+桌宠和设置窗口分别运行在 `bandori-pet` 与 `bandori-ui` 两个进程中，通过本地 IPC 通信（Windows 命名管道、macOS Unix domain socket）。主要代码位于 `crates/`：`pet-app` 负责桌宠和托盘，`pet-ui` 负责设置界面，其他 crate 分别处理模型、渲染、交互、行为和配置。
 
 - [验收清单](docs/ACCEPTANCE.md)：功能覆盖情况、验证方式与已知限制。
 - [内存测量记录](docs/MEMORY.md)：优化前后的测量条件和结果。

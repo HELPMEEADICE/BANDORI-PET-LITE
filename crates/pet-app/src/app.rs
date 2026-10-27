@@ -537,7 +537,7 @@ impl PetApp {
     fn reset_positions(&mut self) {
         let mut occupied = Vec::new();
         for role in &mut self.roles {
-            let monitors = placement::monitors();
+            let monitors = placement::monitors_for_scale(role.window.scale_factor());
             let primary = monitors.iter().find(|monitor| monitor.is_primary).cloned();
             let size = role.size();
             let resolved = placement::resolve_position(
@@ -811,13 +811,21 @@ impl PetApp {
         let (x, y, width, height) =
             role.window_rect()
                 .unwrap_or((role.base_position.0, role.base_position.1, 0, 0));
+        let center = (x + width as i32 / 2, y + height as i32 / 2);
+        // Cross-process coordinates on macOS use logical desktop points so the
+        // popup can select its own backing scale on mixed Retina displays.
+        #[cfg(target_os = "macos")]
+        let center = (
+            (center.0 as f64 / role.window.scale_factor()).round() as i32,
+            (center.1 as f64 / role.window.scale_factor()).round() as i32,
+        );
         self.config.character = role.character.clone();
         self.config.costume = role.costume.clone();
         self.config_dirty = true;
         self.send_snapshot();
         self.ipc.send(&Message::MenuShow {
-            x: x + width as i32 / 2,
-            y: y + height as i32 / 2,
+            x: center.0,
+            y: center.1,
             items: pet_ipc::MenuItem::lite_items(&self.config.language),
             locked: self.config.drag_locked,
         });
@@ -865,6 +873,8 @@ impl ApplicationHandler for PetApp {
                 if let Some(role) = self.roles.get_mut(index) {
                     let size = role.window.inner_size();
                     role.renderer.resize(size, role.window.scale_factor());
+                    #[cfg(target_os = "macos")]
+                    role.record_placement();
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -1050,7 +1060,16 @@ impl PetApp {
 /// Entry point used by both binaries and integration tests.
 pub fn run(paths: Paths) -> AppResult<()> {
     let app = PetApp::new(paths)?;
-    let event_loop = winit::event_loop::EventLoop::new()?;
+    let mut builder = winit::event_loop::EventLoop::builder();
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+        builder
+            .with_activation_policy(ActivationPolicy::Accessory)
+            .with_activate_ignoring_other_apps(false)
+            .with_default_menu(false);
+    }
+    let event_loop = builder.build()?;
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
     let mut app = app;
     event_loop.run_app(&mut app)?;

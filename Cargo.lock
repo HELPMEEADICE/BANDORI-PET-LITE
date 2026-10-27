@@ -3903,6 +3903,7 @@ name = "pet-app"
 version = "0.1.0"
 dependencies = [
  "image",
+ "libc",
  "muda 0.21.2",
  "neocari",
  "pet-assets",
@@ -3982,6 +3983,7 @@ name = "pet-ipc"
 version = "0.1.0"
 dependencies = [
  "interprocess",
+ "libc",
  "pet-config",
  "serde",
  "serde_json",
@@ -4040,12 +4042,18 @@ dependencies = [
 [[package]]
 name = "pet-util"
 version = "0.1.0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "pet-window"
 version = "0.1.0"
 dependencies = [
  "neocari",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "pet-config",
  "pet-util",
  "tracing",

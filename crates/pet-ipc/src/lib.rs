@@ -7,13 +7,66 @@
 use std::io::{Read, Write};
 use std::sync::Arc;
 
-use interprocess::local_socket::{prelude::*, GenericNamespaced, ListenerOptions, Stream};
+#[cfg(not(target_os = "macos"))]
+use interprocess::local_socket::GenericNamespaced;
+use interprocess::local_socket::{prelude::*, ListenerOptions, Name, Stream};
 use pet_config::SettingsPatch;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
 /// Default pipe base name; the session id is appended.
 pub const PIPE_BASE: &str = "bandori-pet-lite";
+
+#[cfg(not(target_os = "macos"))]
+fn socket_name(name: &str) -> std::io::Result<Name<'_>> {
+    name.to_ns_name::<GenericNamespaced>()
+}
+
+#[cfg(target_os = "macos")]
+fn socket_path(name: &str) -> std::io::Result<std::path::PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    if name.is_empty()
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_".contains(&byte))
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "invalid IPC session name",
+        ));
+    }
+    // macOS has no Linux abstract socket namespace. A short, private per-user
+    // directory avoids both /tmp collisions and sockaddr_un's 104-byte limit.
+    let uid = unsafe { libc::geteuid() };
+    let directory = std::path::PathBuf::from(format!("/tmp/bandori-pet-{uid}"));
+    match std::fs::DirBuilder::new().mode(0o700).create(&directory) {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        result => result?,
+    }
+    let metadata = std::fs::symlink_metadata(&directory)?;
+    if !metadata.is_dir() || metadata.uid() != uid || metadata.mode() & 0o077 != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "IPC directory must be private and owned by this user",
+        ));
+    }
+    let path = directory.join(name);
+    if path.as_os_str().as_encoded_bytes().len() >= 104 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "IPC session name is too long",
+        ));
+    }
+    Ok(path)
+}
+
+#[cfg(target_os = "macos")]
+fn socket_name(name: &str) -> std::io::Result<Name<'static>> {
+    use interprocess::local_socket::GenericFilePath;
+    socket_path(name)?
+        .to_fs_name::<GenericFilePath>()
+        .map(Name::into_owned)
+}
 
 /// One radial-menu entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -255,19 +308,37 @@ pub struct Server {
 impl Server {
     /// Binds the pipe. A stale pipe from a previous run is replaced.
     pub fn bind(name: &str) -> Result<Self, IpcError> {
-        let ns_name = name
-            .to_ns_name::<GenericNamespaced>()
-            .map_err(|error| IpcError::Bind {
-                name: name.to_owned(),
-                source: std::io::Error::other(error.to_string()),
-            })?;
-        let listener = ListenerOptions::new()
-            .name(ns_name)
-            .create_sync()
-            .map_err(|error| IpcError::Bind {
-                name: name.to_owned(),
-                source: error,
-            })?;
+        let ns_name = socket_name(name).map_err(|error| IpcError::Bind {
+            name: name.to_owned(),
+            source: std::io::Error::other(error.to_string()),
+        })?;
+        let options = ListenerOptions::new().name(ns_name);
+        let listener = options.create_sync();
+        #[cfg(target_os = "macos")]
+        let listener = match listener {
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                use std::os::unix::{fs::FileTypeExt, net::UnixStream};
+                let path = socket_path(name).map_err(IpcError::Io)?;
+                match UnixStream::connect(&path) {
+                    Err(probe)
+                        if probe.kind() == std::io::ErrorKind::ConnectionRefused
+                            && std::fs::symlink_metadata(&path)
+                                .is_ok_and(|m| m.file_type().is_socket()) =>
+                    {
+                        std::fs::remove_file(&path)?;
+                        ListenerOptions::new()
+                            .name(socket_name(name)?)
+                            .create_sync()
+                    }
+                    _ => Err(error),
+                }
+            }
+            result => result,
+        };
+        let listener = listener.map_err(|error| IpcError::Bind {
+            name: name.to_owned(),
+            source: error,
+        })?;
         debug!(name, "ipc server listening");
         Ok(Self {
             name: name.to_owned(),
@@ -298,12 +369,10 @@ pub struct Connection {
 impl Connection {
     /// Connects to a running pet process.
     pub fn connect(name: &str) -> Result<Self, IpcError> {
-        let ns_name = name
-            .to_ns_name::<GenericNamespaced>()
-            .map_err(|error| IpcError::Bind {
-                name: name.to_owned(),
-                source: std::io::Error::other(error.to_string()),
-            })?;
+        let ns_name = socket_name(name).map_err(|error| IpcError::Bind {
+            name: name.to_owned(),
+            source: std::io::Error::other(error.to_string()),
+        })?;
         let stream = Stream::connect(ns_name)?;
         Ok(Self {
             stream: Arc::new(stream),
@@ -333,6 +402,31 @@ impl Connection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_reclaims_crashed_socket_but_preserves_a_live_listener() {
+        use std::os::unix::net::UnixListener;
+        let name = pipe_name(&format!("stale-{}", std::process::id()));
+        let path = socket_path(&name).unwrap();
+        // std's listener leaves its socket file behind, like a crashed process.
+        drop(UnixListener::bind(&path).unwrap());
+        let server = Server::bind(&name).expect("reclaim stale socket");
+        assert!(
+            Server::bind(&name).is_err(),
+            "must not replace a live listener"
+        );
+        drop(server);
+        assert!(!path.exists(), "clean shutdown reclaims the socket name");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_socket_names_cannot_escape_the_private_directory() {
+        for name in ["", "../other", "/tmp/other", "name/child", &"a".repeat(104)] {
+            assert!(socket_path(name).is_err(), "accepted {name:?}");
+        }
+    }
 
     #[test]
     fn framing_round_trips() {

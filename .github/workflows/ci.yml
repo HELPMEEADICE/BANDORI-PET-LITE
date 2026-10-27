@@ -102,3 +102,46 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps --locked
+
+  macos:
+    name: macOS (${{ matrix.target }}) check, build and tests
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Check Rust and compile Slint UI
+        run: cargo check --workspace --all-targets --locked
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Unit and integration tests
+        run: cargo test --workspace --all-targets --locked
+      - name: Documentation tests
+        run: cargo test --workspace --doc --locked
+      - name: Build and package the app bundle
+        run: bash scripts/package-macos.sh --target=${{ matrix.target }}
+      - name: Upload macOS application
+        uses: actions/upload-artifact@v6
+        with:
+          name: BANDORI-PET-LITE-${{ matrix.target }}
+          path: dist/macos-${{ matrix.target }}-release/BANDORI-PET-LITE.zip
+          if-no-files-found: error

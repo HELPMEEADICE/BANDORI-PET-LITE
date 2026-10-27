@@ -68,8 +68,14 @@ pub fn monitors() -> Vec<MonitorInfo> {
     win32_monitors::enumerate()
 }
 
-/// Enumerates all monitors (non-Windows stub: a single virtual monitor).
-#[cfg(not(windows))]
+/// Enumerates AppKit screens and their visible work areas.
+#[cfg(target_os = "macos")]
+pub fn monitors() -> Vec<MonitorInfo> {
+    crate::macos::monitors(None)
+}
+
+/// Enumerates all monitors (unsupported-platform stub).
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn monitors() -> Vec<MonitorInfo> {
     vec![MonitorInfo {
         name: "display1".to_owned(),
@@ -80,6 +86,44 @@ pub fn monitors() -> Vec<MonitorInfo> {
         work: [0, 0, 1920, 1040],
         is_primary: true,
     }]
+}
+
+/// Work areas in the coordinate system of one window. On macOS the same
+/// backing scale must be applied to all screen origins as to the window origin.
+pub fn monitors_for_scale(scale: f64) -> Vec<MonitorInfo> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::macos::monitors(Some(scale))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = scale;
+        monitors()
+    }
+}
+
+/// Re-expresses a saved physical placement at a different backing scale while
+/// preserving its logical desktop position. Used when restoring macOS windows.
+pub fn placement_at_scale(placement: &Placement, scale: f64) -> Placement {
+    let mut result = placement.clone();
+    if placement.is_unset() {
+        return result;
+    }
+    let previous = placement.device_pixel_ratio;
+    if previous.is_finite() && previous > 0.0 && scale.is_finite() && scale > 0.0 {
+        let ratio = scale / previous;
+        let convert = |value: i32| (value as f64 * ratio).round() as i32;
+        result.x = convert(result.x);
+        result.y = convert(result.y);
+        result.width = (result.width as f64 * ratio).round() as u32;
+        result.height = (result.height as f64 * ratio).round() as u32;
+        result.screen_geometry = result.screen_geometry.map(convert);
+        result.screen_available_geometry = result.screen_available_geometry.map(convert);
+        result.right_offset = convert(result.right_offset);
+        result.bottom_offset = convert(result.bottom_offset);
+        result.device_pixel_ratio = scale;
+    }
+    result
 }
 
 fn clamp(value: i32, low: i32, high: i32) -> i32 {
@@ -311,7 +355,11 @@ pub fn auto_start_enabled(exe: &Path) -> bool {
     {
         registry::read_run_value(exe)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        crate::launch_agent::enabled(exe)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = exe;
         false
@@ -324,14 +372,17 @@ pub fn set_auto_start(exe: &Path, enabled: bool) -> std::io::Result<()> {
     {
         registry::write_run_value(exe, enabled)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        crate::launch_agent::set_enabled(exe, enabled)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (exe, enabled);
         Ok(())
     }
 }
 
-#[cfg(windows)]
 #[cfg(windows)]
 mod win32_monitors {
     //! `EnumDisplayMonitors` + `EnumDisplayDevicesW` wrappers.
@@ -527,6 +578,30 @@ mod registry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restoring_a_retina_placement_at_another_scale_preserves_desktop_points() {
+        let stored = Placement {
+            x: -1800,
+            y: 600,
+            width: 800,
+            height: 1200,
+            device_pixel_ratio: 2.0,
+            screen_geometry: [-2400, 0, 2400, 1800],
+            screen_available_geometry: [-2400, 48, 2400, 1652],
+            relative_x: 0.25,
+            bottom_offset: 2,
+            ..Default::default()
+        };
+        let scaled = placement_at_scale(&stored, 1.0);
+        assert_eq!((scaled.x, scaled.y), (-900, 300));
+        assert_eq!(scaled.screen_geometry, [-1200, 0, 1200, 900]);
+        assert_eq!(scaled.screen_available_geometry, [-1200, 24, 1200, 826]);
+        assert_eq!((scaled.width, scaled.height), (400, 600));
+        assert_eq!(scaled.relative_x, stored.relative_x);
+        assert_eq!(placement_at_scale(&scaled, 2.0), stored);
+        assert!(placement_at_scale(&Placement::default(), 2.0).is_unset());
+    }
 
     fn monitor(name: &str, geometry: [i32; 4], work: [i32; 4]) -> MonitorInfo {
         MonitorInfo {

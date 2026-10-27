@@ -11,11 +11,22 @@ pub const ROOT_ENV: &str = "BANDORI_PET_ROOT";
 pub struct Paths {
     root: PathBuf,
     cache: PathBuf,
+    executable_dir: PathBuf,
+    bundled_assets: Option<PathBuf>,
 }
 
 impl Paths {
-    /// Discovers the layout: `$BANDORI_PET_ROOT`, else the executable directory.
+    /// Discovers the data root: `$BANDORI_PET_ROOT`, else Application Support on
+    /// macOS or the executable directory on Windows.
     pub fn discover() -> Self {
+        #[cfg(target_os = "macos")]
+        if let (Ok(exe), Some(home)) = (std::env::current_exe(), std::env::var_os("HOME")) {
+            return Self::macos_layout(
+                &exe,
+                Path::new(&home),
+                std::env::var_os(ROOT_ENV).map(PathBuf::from),
+            );
+        }
         let root = std::env::var_os(ROOT_ENV)
             .map(PathBuf::from)
             .or_else(|| {
@@ -34,10 +45,34 @@ impl Paths {
             .unwrap_or_else(|| root.clone())
             .join("BandoriPetLite")
             .join("cache");
-        Self { root, cache }
+        Self {
+            executable_dir: root.clone(),
+            root,
+            cache,
+            bundled_assets: None,
+        }
     }
 
-    /// Installation root (contains both executables).
+    #[cfg(any(target_os = "macos", test))]
+    fn macos_layout(exe: &Path, home: &Path, root: Option<PathBuf>) -> Self {
+        let executable_dir = exe.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let bundled_assets = executable_dir
+            .parent()
+            .filter(|_| {
+                executable_dir
+                    .file_name()
+                    .is_some_and(|name| name == "MacOS")
+            })
+            .map(|contents| contents.join("Resources/assets"));
+        Self {
+            root: root.unwrap_or_else(|| home.join("Library/Application Support/BandoriPetLite")),
+            cache: home.join("Library/Caches/BandoriPetLite/cache"),
+            executable_dir,
+            bundled_assets,
+        }
+    }
+
+    /// Writable data root (configuration, models and logs).
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -59,7 +94,12 @@ impl Paths {
 
     /// `assets/` holding `band.json`, `outfit.json`, icons and fonts.
     pub fn assets(&self) -> PathBuf {
-        self.root.join("assets")
+        let custom = self.root.join("assets");
+        if custom.is_dir() {
+            custom
+        } else {
+            self.bundled_assets.clone().unwrap_or(custom)
+        }
     }
 
     /// `logs/`.
@@ -72,24 +112,24 @@ impl Paths {
         self.root.join("ui")
     }
 
-    /// `%LOCALAPPDATA%\BandoriPetLite\cache` — extracted model costumes.
+    /// Extracted model costumes in the user's platform cache directory.
     pub fn cache(&self) -> &Path {
         &self.cache
     }
 
-    /// `%LOCALAPPDATA%\BandoriPetLite` — cache parent.
+    /// User-local cache parent.
     pub fn local_data(&self) -> Option<PathBuf> {
         self.cache.parent().map(Path::to_path_buf)
     }
 
-    /// Path of the settings executable that lives next to `bandori-pet.exe`.
+    /// Path of the settings executable beside the pet executable.
     pub fn ui_executable(&self) -> PathBuf {
-        self.root.join(exe_name("bandori-ui"))
+        self.executable_dir.join(exe_name("bandori-ui"))
     }
 
     /// Path of the pet executable.
     pub fn pet_executable(&self) -> PathBuf {
-        self.root.join(exe_name("bandori-pet"))
+        self.executable_dir.join(exe_name("bandori-pet"))
     }
 }
 
@@ -102,6 +142,11 @@ fn exe_name(stem: &str) -> String {
 }
 
 fn local_app_data() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        std::env::var_os("HOME").map(|home| PathBuf::from(home).join("Library/Caches"))
+    }
+    #[cfg(not(target_os = "macos"))]
     std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
 }
 
@@ -131,5 +176,46 @@ mod tests {
         assert_eq!(paths.models(), PathBuf::from("C:/app/models"));
         assert!(paths.model_index().ends_with(".bandori_model_index.json"));
         assert!(paths.cache().ends_with("BandoriPetLite/cache"));
+    }
+
+    #[test]
+    fn macos_bundle_keeps_writable_data_outside_the_app() {
+        let paths = Paths::macos_layout(
+            Path::new("/Applications/Bandori Pet.app/Contents/MacOS/bandori-pet"),
+            Path::new("/Users/test"),
+            None,
+        );
+        assert_eq!(
+            paths.config(),
+            PathBuf::from("/Users/test/Library/Application Support/BandoriPetLite/config.json")
+        );
+        assert_eq!(
+            paths.cache(),
+            Path::new("/Users/test/Library/Caches/BandoriPetLite/cache")
+        );
+        assert_eq!(
+            paths.assets(),
+            PathBuf::from("/Applications/Bandori Pet.app/Contents/Resources/assets")
+        );
+        // The platform suffix varies when this pure layout test runs on Windows.
+        assert_eq!(
+            paths.ui_executable().parent(),
+            Some(Path::new("/Applications/Bandori Pet.app/Contents/MacOS"))
+        );
+    }
+
+    #[test]
+    fn macos_root_override_keeps_the_companion_binary_location() {
+        let paths = Paths::macos_layout(
+            Path::new("/build/target/debug/bandori-pet"),
+            Path::new("/Users/test"),
+            Some(PathBuf::from("/custom/data")),
+        );
+        assert_eq!(paths.models(), PathBuf::from("/custom/data/models"));
+        assert_eq!(
+            paths.pet_executable().parent(),
+            Some(Path::new("/build/target/debug"))
+        );
+        assert_eq!(paths.assets(), PathBuf::from("/custom/data/assets"));
     }
 }

@@ -12,8 +12,10 @@ use pet_input::hit::{AlphaTexture, FrameSnapshot, HitStability};
 
 use pet_live2d::{ModelHandle, ModelInfo};
 use pet_render::{ModelGpu, RenderError, SceneRenderer};
+use pet_window::placement;
 use pet_window::sizing::{content_size, ModelLayout};
-use pet_window::{placement, win32};
+#[cfg(windows)]
+use pet_window::win32;
 use tracing::{error, info, warn};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton};
@@ -50,6 +52,8 @@ struct DragState {
     press_cursor_global: (f32, f32),
     /// Window position when the drag started.
     press_window: (i32, i32),
+    #[cfg(target_os = "macos")]
+    press_scale: f64,
     moved: bool,
     total: (f32, f32),
 }
@@ -127,16 +131,20 @@ impl Role {
 
         let bounds = content_size(model.meshes()).ok_or(RoleError::NoBounds)?;
         let layout = ModelLayout::new(bounds, model.face_height(), model.format());
-        let monitors = placement::monitors();
         let dpr = event_loop
             .primary_monitor()
             .or_else(|| event_loop.available_monitors().next())
             .map(|monitor| monitor.scale_factor())
             .unwrap_or(1.0);
+        let monitors = placement::monitors_for_scale(dpr);
         let scale = config.effective_scale_percent(dpr);
         let (width, height) = layout.window_size(scale, dpr);
         let primary = monitors.iter().find(|monitor| monitor.is_primary).cloned();
         let mut stored = entry.window_placement.clone();
+        #[cfg(target_os = "macos")]
+        {
+            stored = placement::placement_at_scale(&stored, dpr);
+        }
         stored.width = width;
         stored.height = height;
         let decision =
@@ -185,11 +193,29 @@ impl Role {
                 .with_position(PhysicalPosition::new(decision.x, decision.y));
         #[cfg(windows)]
         let attributes = attributes.with_skip_taskbar(true);
+        #[cfg(target_os = "macos")]
+        let attributes = {
+            use winit::platform::macos::WindowAttributesExtMacOS;
+            attributes
+                .with_has_shadow(false)
+                .with_accepts_first_mouse(true)
+                .with_position(winit::dpi::LogicalPosition::new(
+                    decision.x as f64 / dpr,
+                    decision.y as f64 / dpr,
+                ))
+                .with_inner_size(winit::dpi::LogicalSize::new(
+                    width as f64 / dpr,
+                    height as f64 / dpr,
+                ))
+        };
         let window = Arc::new(
             event_loop
                 .create_window(attributes)
                 .map_err(|error| RoleError::Window(error.to_string()))?,
         );
+
+        #[cfg(target_os = "macos")]
+        pet_window::macos::apply_overlay_style(&window);
 
         #[cfg(windows)]
         {
@@ -269,6 +295,8 @@ impl Role {
         };
         role.set_hit_alpha_threshold(config.live2d_hit_alpha_threshold);
         role.apply_display_settings(config);
+        #[cfg(target_os = "macos")]
+        role.record_placement();
         // The configured default motion/expression used to be dropped on the floor
         // here, so the pet stood in the neutral pose until the first ambient action.
         for command in role.behavior.start(0.0) {
@@ -372,6 +400,13 @@ impl Role {
         if let Some(hwnd) = win32::hwnd_of(&self.window) {
             return win32::window_rect(hwnd);
         }
+        #[cfg(not(windows))]
+        {
+            let position = self.window.outer_position().ok()?;
+            let size = self.window.inner_size();
+            Some((position.x, position.y, size.width, size.height))
+        }
+        #[cfg(windows)]
         None
     }
 
@@ -388,10 +423,7 @@ impl Role {
             win32::set_window_rect(hwnd, x, y, width, height);
             return;
         }
-        let _ = self.window.request_inner_size(PhysicalSize::new(
-            self.window.inner_size().width.max(1),
-            self.window.inner_size().height.max(1),
-        ));
+        self.window.set_outer_position(PhysicalPosition::new(x, y));
     }
 
     /// Records the current window rect into the placement record.
@@ -399,7 +431,7 @@ impl Role {
         let Some((x, y, width, height)) = self.window_rect() else {
             return;
         };
-        let monitors = placement::monitors();
+        let monitors = placement::monitors_for_scale(self.window.scale_factor());
         let monitor =
             placement::monitor_at(&monitors, (x + width as i32 / 2, y + height as i32 / 2));
         let Some(monitor) = monitor else {
@@ -421,7 +453,7 @@ impl Role {
         let Some((x, y, width, height)) = self.window_rect() else {
             return;
         };
-        let monitors = placement::monitors();
+        let monitors = placement::monitors_for_scale(self.window.scale_factor());
         if let Some(monitor) =
             placement::monitor_at(&monitors, (x + width as i32 / 2, y + height as i32 / 2))
         {
@@ -495,14 +527,14 @@ impl Role {
     pub fn poll_passthrough(&mut self, config: &Config, now_ms: u64) {
         // A click-through window receives no CursorMoved/Entered events. Use the
         // global cursor so it can become interactive again without a 125ms lag.
-        let near = global_cursor().zip(self.window_rect()).is_some_and(
-            |((cx, cy), (x, y, width, height))| {
+        let near = global_cursor(&self.window)
+            .zip(self.window_rect())
+            .is_some_and(|((cx, cy), (x, y, width, height))| {
                 cx >= x as f32 - 96.0
                     && cy >= y as f32 - 96.0
                     && cx < x as f32 + width as f32 + 96.0
                     && cy < y as f32 + height as f32 + 96.0
-            },
-        );
+            });
         let interval = if near { 16 } else { 125 };
         if self.last_passthrough_poll.elapsed().as_millis() < interval as u128 {
             return;
@@ -574,13 +606,15 @@ impl Role {
         // Drag math uses the *global* cursor: moving the window changes the local
         // cursor by the same amount, which would otherwise create a feedback loop
         // that makes the window lag behind the pointer.
-        let press_cursor_global = global_cursor().unwrap_or_else(|| {
+        let press_cursor_global = global_cursor(&self.window).unwrap_or_else(|| {
             let (wx, wy) = self.base_position;
             (wx as f32 + cursor.0, wy as f32 + cursor.1)
         });
         self.dragging = Some(DragState {
             press_cursor_global,
             press_window: (x, y),
+            #[cfg(target_os = "macos")]
+            press_scale: self.window.scale_factor(),
             moved: false,
             total: (0.0, 0.0),
         });
@@ -589,12 +623,22 @@ impl Role {
 
     /// Handles cursor movement while dragging; returns whether the window moved.
     pub fn on_cursor_moved_drag(&mut self, cursor: (f32, f32)) -> bool {
-        let Some(global) = global_cursor() else {
+        let Some(global) = global_cursor(&self.window) else {
             return false;
         };
         let Some(drag) = self.dragging.as_mut() else {
             return false;
         };
+        // A window's physical desktop coordinates change units as it crosses
+        // between Retina and non-Retina screens. Keep drag deltas in the units
+        // captured at the press, then convert the destination to current units.
+        #[cfg(target_os = "macos")]
+        let ratio = self.window.scale_factor() / drag.press_scale;
+        #[cfg(target_os = "macos")]
+        let global = (
+            (global.0 as f64 / ratio) as f32,
+            (global.1 as f64 / ratio) as f32,
+        );
         let dx = global.0 - drag.press_cursor_global.0;
         let dy = global.1 - drag.press_cursor_global.1;
         drag.total = (dx, dy);
@@ -607,6 +651,11 @@ impl Role {
         }
         let new_x = drag.press_window.0 + dx.round() as i32;
         let new_y = drag.press_window.1 + dy.round() as i32;
+        #[cfg(target_os = "macos")]
+        let (new_x, new_y) = (
+            (new_x as f64 * ratio).round() as i32,
+            (new_y as f64 * ratio).round() as i32,
+        );
         self.set_position(new_x, new_y);
         true
     }
@@ -640,7 +689,7 @@ impl Role {
         // Window events stop outside the window and while it is click-through.
         // Sample the screen cursor every tick, keeping out-of-bounds local
         // coordinates so head tracking still sees targets beyond the window.
-        let cursor_local = global_cursor()
+        let cursor_local = global_cursor(&self.window)
             .zip(self.window_rect())
             .map(|((cx, cy), (x, y, ..))| (cx - x as f32, cy - y as f32))
             .or(self.cursor);
@@ -723,7 +772,7 @@ impl Role {
         if self.hide_live2d_model || self.hidden || config.opacity <= 0.0 {
             return true;
         }
-        let Some(global) = global_cursor() else {
+        let Some(global) = global_cursor(&self.window) else {
             return false;
         };
         let Some((x, y, width, height)) = self.window_rect() else {
@@ -773,6 +822,8 @@ impl Role {
             return;
         }
         self.last_topmost = Instant::now();
+        #[cfg(not(windows))]
+        self.window.set_window_level(WindowLevel::AlwaysOnTop);
         #[cfg(windows)]
         if let Some(hwnd) = win32::hwnd_of(&self.window) {
             win32::reassert_topmost(hwnd);
@@ -797,6 +848,12 @@ impl Role {
     }
 
     fn sync_visibility(&self) {
+        #[cfg(target_os = "macos")]
+        pet_window::macos::set_visible(
+            &self.window,
+            self.first_frame_done && !self.hidden && !self.hide_live2d_model,
+        );
+        #[cfg(not(target_os = "macos"))]
         self.window
             .set_visible(self.first_frame_done && !self.hidden && !self.hide_live2d_model);
         // Also applies in OBS mode, where APPWINDOW is retained for capture.
@@ -937,6 +994,8 @@ impl Role {
 
     /// Applies the OBS capture style without recreating the window.
     pub fn apply_obs_capture(&self, enabled: bool) {
+        #[cfg(not(windows))]
+        let _ = enabled;
         #[cfg(windows)]
         if let Some(hwnd) = win32::hwnd_of(&self.window) {
             if let Err(error) = win32::apply_pet_style(hwnd, enabled) {
@@ -958,12 +1017,18 @@ impl Role {
     }
 }
 
-fn global_cursor() -> Option<(f32, f32)> {
+fn global_cursor(window: &Window) -> Option<(f32, f32)> {
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
     #[cfg(windows)]
     {
         win32::cursor_position()
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        pet_window::macos::cursor_position(window)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         None
     }

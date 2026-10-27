@@ -1,4 +1,4 @@
-//! Window plumbing for the pet: Win32 styles, click-through, DWM decorations,
+//! Window plumbing for the pet: native styles, click-through, decorations,
 //! opacity, DPI, position persistence and z-order.
 //!
 //! The transparent wgpu surface lives in `pet-render`; this crate only owns the
@@ -9,6 +9,12 @@ pub mod sizing;
 
 #[cfg(windows)]
 pub mod win32;
+
+#[cfg(target_os = "macos")]
+pub mod macos;
+
+#[cfg(any(target_os = "macos", test))]
+mod launch_agent;
 
 pub use placement::{
     auto_start_enabled, resolve_position, set_auto_start, MonitorInfo, PositionDecision,

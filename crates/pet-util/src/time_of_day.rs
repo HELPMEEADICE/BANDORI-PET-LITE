@@ -92,15 +92,19 @@ impl IdleTier {
 
 /// Current local hour, derived without pulling in a date/time crate.
 pub fn local_hour() -> u32 {
-    // `SystemTime` is UTC; Windows exposes the local offset through
-    // `GetTimeZoneInformation`, but reading `TZ`/registry is overkill for a
-    // bucket that only changes four times a day. `libc`-free approach: use the
-    // `%LOCALAPPDATA%`-free `std::time` value plus the offset reported by the
-    // operating system through `time` is not available, so fall back to asking
-    // PowerShell-free: `std::env::var("BANDORI_PET_HOUR")` in tests, else UTC+8.
     if let Ok(hour) = std::env::var("BANDORI_PET_HOUR") {
         if let Ok(hour) = hour.parse::<u32>() {
             return hour % 24;
+        }
+    }
+    #[cfg(target_os = "macos")]
+    if std::env::var_os("BANDORI_PET_UTC_OFFSET").is_none() {
+        let timestamp = unsafe { libc::time(std::ptr::null_mut()) };
+        let mut local = std::mem::MaybeUninit::<libc::tm>::uninit();
+        // localtime_r reads the system timezone, including DST and fractional
+        // offsets, without sharing libc's global `tm` buffer across threads.
+        if !unsafe { libc::localtime_r(&timestamp, local.as_mut_ptr()) }.is_null() {
+            return unsafe { local.assume_init() }.tm_hour as u32;
         }
     }
     let utc_secs = SystemTime::now()

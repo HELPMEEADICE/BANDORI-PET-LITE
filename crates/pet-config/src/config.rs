@@ -16,7 +16,7 @@ pub enum DarkTheme {
     Off,
     /// Force the dark palette.
     On,
-    /// Follow the Windows apps theme.
+    /// Follow the system apps theme.
     #[default]
     System,
 }

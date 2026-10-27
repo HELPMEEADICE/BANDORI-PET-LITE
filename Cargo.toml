@@ -81,6 +81,10 @@ tokio = { version = "1", features = ["rt", "time"] }
 tempfile = "3"
 pollster = "1"
 interprocess = "2.4"
+libc = "0.2"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSEvent", "NSResponder", "NSScreen", "NSView", "NSWindow", "NSGraphics", "objc2-core-foundation"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSEnumerator", "NSGeometry", "NSDictionary", "NSValue", "NSString"] }
 
 [profile.release]
 opt-level = 3
