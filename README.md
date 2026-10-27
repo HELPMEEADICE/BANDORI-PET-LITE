@@ -1,155 +1,63 @@
 # BANDORI-PET-LITE
 
-桌面上站着一个 Live2D 角色：会呼吸、会看向鼠标、点哪动哪、能换装能缩放；右键一个圆盘菜单，托盘一个设置入口，所有参数都在一个五页的设置窗里改。
+把 BanG Dream! 的 Live2D 角色放到 Windows 桌面上。你可以拖动角色、点击不同部位触发动作，也可以同时放上多个角色，给他们各自换装。
 
-实现规格见 `../BANDORI-PET-REV/docs/BANDORI-PET-LITE.md`（下称「规格」）。本仓库是该规格的 Rust 实现：模型解析与绘制全部交给纯 Rust 的 [Neocari](https://github.com/HELPMEEADICE/Neocari)（Cubism 2 `.moc` + Cubism 3/4/5 `.moc3`，内置 wgpu 后端），不引入 LuaJIT、不引入 Cubism Core。
+项目使用 Rust 和 [Neocari](https://github.com/HELPMEEADICE/Neocari) 构建，支持 Cubism 2 的 `.moc` 和 Cubism 3/4/5 的 `.moc3` 模型。本仓库不包含模型文件；可以在程序里下载，也可以导入已有的模型包。
 
-```
-bandori-pet.exe   常驻：桌宠窗口（每角色一个）、wgpu surface、托盘、config.json 唯一写者
-bandori-ui.exe    常驻隐藏：Slint 设置窗（5 页）+ 径向菜单
-```
+## 开始使用
 
-两个进程用命名管道交换 `CONFIG_SNAPSHOT` / `SETTINGS_PATCH` 等消息，见 `crates/pet-ipc`。
+需要 Windows 10 或 11，以及支持 Vulkan 或 DirectX 12 的显卡。将 `bandori-pet.exe` 和 `bandori-ui.exe` 放在同一个目录，运行 `bandori-pet.exe` 即可。首次启动时，如果没有找到模型，程序会打开「模型下载与更新」页面；下载喜欢的角色后就可以选择服装了。
 
-## 已实现
+也可以提前把模型包放进运行目录下的 `models/`。模型包为 `.zst` 格式的 tar 归档，每套服装占一个顶层目录，包含 `model.json` 或 `*.model3.json`。角色和服装名称使用内置目录；如有需要，也可以在运行目录的 `assets/` 下提供 `band.json` 和 `outfit.json`。
 
-| 规格 | 实现 | 位置 |
-|---|---|---|
-| §2.1 窗口：`WS_POPUP` + 透明 + 不抢焦点 + 不进任务栏 + Win11 去圆角/去白边 | winit 建窗 + `SetWindowLongPtr`/`DwmSetWindowAttribute` | `crates/pet-window/src/win32.rs` |
-| §2.1 DPI：per-monitor v2，统一模型观感并预留动作空间 | 脸部尺寸归一 → 内容包围盒加留白 → 物理尺寸与拟合矩阵 | `crates/pet-window/src/sizing.rs` |
-| §2.2 `.zst` 归档 → 解压缓存 → Neocari 路径制加载；LRU 8 套；拒绝 `..`/绝对路径/软链 | zstd+tar 流式解压，按归档名+服装落地 | `crates/pet-assets` |
-| §2.2 moc / moc3 双入口 | `ModelHandle::{Moc2,Moc3}` 适配器 | `crates/pet-live2d` |
-| §2.3 mask pass + main pass，预乘 alpha，`PreMultiplied` surface | Neocari 管线 + 中间纹理 blit（画质缩放 + 不透明度） | `crates/pet-render` |
-| §2.3 画质档位 = 渲染分辨率缩放（省电 0.75×） | 中间 target 缩小后线性放大 | `crates/pet-render` |
-| §2.3 熔断：连续 3 帧失败停渲染 | `FAILURE_FUSE = 3` | `crates/pet-render` |
-| §2.4 CPU 命中：AABB → 三角形 → 纹理 alpha>8；120ms/12px 稳定性补偿 | 纯 CPU，零 GPU 回读 | `crates/pet-input/src/hit.rs` |
-| §2.4 穿透：动态 `WS_EX_TRANSPARENT`，16ms/125ms 双档轮询，80ms/12px 补偿 | 轮询 + 样式切换 | `crates/pet-app`、`crates/pet-window` |
-| §2.5 拖拽（<4px 视为单击）、单击动作、右键径向菜单、托盘 | 全局坐标拖拽（避免窗口移动回授） | `crates/pet-app/src/role.rs` |
-| §2.6 7 区判定 + 4 级名称匹配 + 7 套预设 + 标签→表情表 + `""`/`__random__`/`__none__` | 逐条复刻自 Python 原版（含 `thinking` 候选扩展与 `f01` 兜底） | `crates/pet-input/src/{region,matching}.rs`、`crates/pet-config/src/presets.rs` |
-| §2.7 待机/随机/时段/靠近/对视/情绪位移 | 5s tick、180s 冷却、7min 发呆、18min 睡眠、600px 视线上限、6 种窗口位移 | `crates/pet-behavior` |
-| §2.8 多角色：一模型一窗口、共享 GPU、一起拖动、位置 14 字段持久化 | `models[]` → 多 `Role` | `crates/pet-app`、`crates/pet-window/src/placement.rs` |
-| §3 设置窗 + 生效分级（Instant/ReloadModel/RebuildWindow/RestartApp） | Slint + 补丁路由；新增模型下载与更新页 | `crates/pet-ui`、`crates/pet-config/src/patch.rs` |
-| 模型下载与更新 | ModelScope 角色包、批量下载/更新、进度与取消、校验后原子替换、列表刷新与已运行角色重载 | `crates/pet-assets/src/download.rs`、`crates/pet-ui/src/downloads.rs` |
-| §3.6 单写者、原子写、校验回落、未知键原样回写、首启动开设置页 | `serde_json::Value` overlay + 临时文件 + `rename` | `crates/pet-config/src/store.rs` |
-| §5 IPC | 命名管道 + 长度前缀 JSON | `crates/pet-ipc` |
+## 桌面上的操作
 
-尚未完成/替代实现（都在 `docs/ACCEPTANCE.md` 里写明）：`WM_NCHITTEST → HTTRANSPARENT` 安全网、像素模式、i18n 仅中/英两套字符串、点击动作配置的导入/导出 UI。
+- 拖动角色可以调整位置；右键角色打开径向菜单，锁定后可以避免误拖。
+- 点击角色的不同部位可以触发动作和表情。在「角色行为」中可以调整点击反馈、视线追踪和待机动作等设置。
+- 从托盘打开设置，在「角色列表」里切换角色或服装，也可以添加更多桌面角色。每个角色的位置会单独保存，重启后恢复。
+- 「显示设置」可以调整缩放、透明度和帧率等；右侧还有置顶、OBS 采集兼容、隐藏角色和开机自启动选项。
 
-## 目录
+选择角色和服装时可以搜索、收藏和查看最近使用的项目。服装列表支持静态预览；已有的自定义 `.zst` 归档也可以从选择界面导入，同名归档不会被覆盖。
 
-```
-Cargo.toml                  workspace（10 个 crate + vendor/neocari）
-crates/
-  pet-config/               配置 schema、默认值、校验、原子写、补丁分级、预设标签表
-  pet-assets/               .zst 读取、解压缓存（LRU）、模型索引、band/outfit 目录
-  pet-live2d/               Neocari 适配：moc2/moc3、moc3 的 motion/expression/眨眼/呼吸装配
-  pet-render/               wgpu 设备、surface、mask+main+blit 三 pass、画质与不透明度
-  pet-window/               Win32 样式/穿透/DWM、显示器枚举、位置持久化、自启动
-  pet-input/                CPU 命中、区域判定、名称匹配、AUTO 桶、预设展开
-  pet-behavior/             待机/随机/时段/视线/对视/情绪位移
-  pet-ipc/                  命名管道协议
-  pet-ui/                   Slint 设置窗 + 径向菜单（`ui/settings.slint`）
-  pet-app/                  事件循环、角色窗口、托盘、IPC 宿主、UI 进程守护、两个 bin
-  pet-util/                 RNG、缓动、时段分档
-vendor/neocari/             Neocari @ ba9de37 的 vendored 源码（见 PATCHES.md）
-assets/                     band.json、outfit.json（角色/服装中文名）
-docs/ACCEPTANCE.md          规格 §7 验收清单 × 实测证据
-run/                        本地联调目录（可随时删；scripts/run-dev.ps1 会重建）
-```
+## 下载和更新模型
 
-## 构建
+在设置中打开「模型下载与更新」，可以按角色、乐队或 key 搜索，单独下载或更新角色，也可以批量下载缺失的模型或更新已安装的模型。下载过程中可以查看进度和取消任务。
 
-依赖：Rust 1.85+、Windows 10/11、可用 GPU（Vulkan/DX12，wgpu 30）。不需要 SDL2/LuaJIT/C++ 工具链。
+模型来自 ModelScope 的 `HELPMEEADICE/BanG-Dream-Live2D` 数据集。程序会先校验下载的归档，再替换已有文件；下载失败或取消时会保留原来的模型。完成后列表会自动刷新，正在使用的角色也会重新加载。
+
+设置保存在运行目录的 `config.json` 中。模型暂时缺失或加载失败时，程序会保留对应的角色配置，方便之后恢复。
+
+## 从源码构建
+
+需要 Rust 1.85 或更新版本。项目使用仓库内的 Neocari 源码，不需要 LuaJIT 或 Cubism Core。
 
 ```powershell
 cargo build --release --bin bandori-pet --bin bandori-ui
-cargo test --workspace          # 144 个单元/集成测试（另有 6 个需真实模型/GPU 的 ignored）
+cargo test --workspace
 ```
 
-产物：`target/release/bandori-pet.exe`、`target/release/bandori-ui.exe`。
+构建后的程序位于 `target/release/`。把两个 exe 放到同一个运行目录即可启动。
 
-## 运行
-
-1. 建一个运行目录，把两个 exe 放进去；
-2. 可在 `models/` 放 `kasumi.zst` 等归档（格式：tar.zst，每个服装一个顶层目录，含 `model.json` 或 `*.model3.json`），也可启动后在线下载；
-3. `assets/` 可放 `band.json`、`outfit.json`；缺失时使用内置角色目录；
-4. 直接运行 `bandori-pet.exe`：首次启动扫描本地模型，无可用模型时自动打开设置的「模型下载与更新」页；已有模型时自动挑第一个可用角色并打开角色页。
-
-开发联调脚本（会从已有的 Bandori 资源目录拷贝 3 个归档并生成 `run/`）：
+如果本地已经有兼容的模型目录，可以用开发脚本准备 `run/` 并启动：
 
 ```powershell
-pwsh -File scripts/run-dev.ps1 -ModelsFrom C:\oss\BANDORI-PET-REV\models
-$env:BANDORI_PET_ROOT = "$PWD\run"; .\run\bandori-pet.exe
+pwsh -File scripts/run-dev.ps1 -ModelsFrom C:\path\to\models
+$env:BANDORI_PET_ROOT = "$PWD\run"
+.\run\bandori-pet.exe
 ```
 
-环境变量：`BANDORI_PET_ROOT`（安装根目录）、`BANDORI_PET_EXIT_AFTER_SECS`（N 秒后自动退出，CI 用）、`BANDORI_PET_HEADLESS`（不建角色窗口）、`RUST_LOG`。
+脚本默认复制 `kasumi`、`anon` 和 `asuka` 的归档；可以通过 `-Characters` 指定其他角色，或使用 `-Release` 构建 release 版本。`BANDORI_PET_ROOT` 用于指定运行目录；开发和测试还可以使用 `RUST_LOG`、`BANDORI_PET_HEADLESS` 和 `BANDORI_PET_EXIT_AFTER_SECS`。
 
-右键模型会在角色中心呼出灰黑色径向菜单：没有标题栏或矩形底板，按钮之间的透明区域可直接点击下层窗口。四个按钮在 180ms 内由中心向外弹出，点击动作或菜单外部后在 120ms 内收回。点击中心锁按钮立即切换 🔒 / 🔓 并更新拖拽锁定，菜单保持打开，设置页同步显示最新状态。菜单按当前显示器 DPI 缩放，并限制在工作区内。
+## 项目结构与开发资料
 
-## 选队、选角与换装
+桌宠和设置窗口分别运行在 `bandori-pet` 与 `bandori-ui` 两个进程中，通过命名管道通信。主要代码位于 `crates/`：`pet-app` 负责桌宠和托盘，`pet-ui` 负责设置界面，其他 crate 分别处理模型、渲染、交互、行为和配置。
 
-设置的「切换角色/服装」和「添加 Live2D 模型」进入三级选择界面：乐队 Logo 卡片 → 角色立绘卡片 → 服装列表。仅展示当前 `models/` 中已安装的角色；顺序与参考项目一致。选择服装后立即切换并回到详情页，添加模型时保留其他已配置角色。
+- [验收清单](docs/ACCEPTANCE.md)：功能覆盖情况、验证方式与已知限制。
+- [内存测量记录](docs/MEMORY.md)：优化前后的测量条件和结果。
+- [行为参考](docs/reference/BANDORI-PET-REV-behavior-spec.md)：动作匹配、区域和行为参数的参考记录。
 
-角色可按名称、乐队、key 搜索，服装可按名称、id 搜索；两页均支持最近使用和收藏筛选。服装右侧的眼睛按钮固定/关闭静态预览，按住 Shift 悬停可临时预览。预览在后台离屏生成，不创建桌面窗口。右侧设置通过「应用」保存，收藏与最近使用随配置保存。
+部分功能仍有局限：目前只提供中英文字符串，点击动作配置还没有导入和导出界面；其他实现差异见验收清单。
 
-右侧「桌面角色」列表可选择当前编辑的角色，再点击「切换角色/服装」单独换装；「添加 Live2D 模型」会立即增加一个共享 GPU 的独立桌面窗口，其他角色保持原位。同一角色只放置一次，选择已有角色的新服装会更新它。点击列表中的 × 移除对应角色，至少保留一个。新角色和「重置位置」会优先寻找屏幕内的空位。
+## 许可与素材
 
-所有设置保存在运行目录的 `config.json`（使用 `BANDORI_PET_ROOT` 时位于该目录），每个角色在 `models[]` 中独立记录角色、服装和窗口位置；当前编辑角色由顶层 `character` / `costume` 记录。拖动结束后约 2 秒自动保存，正常退出时立即保存，重启后恢复各自位置。配置兼容旧版 `window_x` / `window_y` 坐标及带 UTF-8 BOM 的 JSON；模型暂时缺失或加载失败时保留其配置，避免后续保存丢失角色。
-
-「导入自定义模型」支持填写 `.zst` 模型归档的完整路径，导入后立即刷新选择列表；同名归档不会被覆盖。
-
-## 模型下载与更新
-
-设置左侧的「模型下载与更新」按乐队列出可下载角色与本地自定义角色，支持按角色名称、key、乐队搜索。点击「下载」安装单个角色包；已安装角色可点击「更新 / 重试」重新下载最新资源。也可使用「下载缺失」或「更新已安装」批量处理，下载逐个执行，提供大小、进度、速度及取消操作；失败后可重新点击对应角色重试。
-
-下载源与 BANDORI-PET-REV 一致，为 ModelScope 的 `HELPMEEADICE/BanG-Dream-Live2D` 数据集。模型先写入临时文件，下载长度和完整 tar.zst 校验通过后才原子替换旧文件；失败或取消会清理临时文件并保留旧包。完成后自动刷新角色/服装目录、立绘和预览缓存，正在使用的角色会重新加载。点击「选择服装」可直接进入该角色的服装列表，无需重启程序。
-
-## 关键实现说明
-
-**无损内存优化。** 原图上传 GPU 后，CPU 仅保留原分辨率的 alpha 用于命中；moc3 网格和变形器共享关键帧坐标，并减少 GPU 分配器的空闲预留。画质、贴图大小、动画精度及 FPS 设置不变。爱音单角色连续复测工作集约 317→242 MiB，私有提交约 550→342 MiB，详见 [测量条件与回归记录](docs/MEMORY.md)。
-
-**冷启动优先出画面。** 已有配置且 `config.models` 已有角色时，不扫描 `models/*.zst`（模型索引改为设置窗首次需要时惰性扫描）；首次启动或无配置角色时扫描模型，没有可用模型则打开下载页。托盘图标在首帧之后再创建。此前 release 实测 `role ready 1.10s`，首帧可见 1.54s（含建进程开销）。
-
-**只有 pet 写配置。** 设置窗发出 `SETTINGS_PATCH`（键可为点路径，如 `click_motion_actions.head.motion`），pet 反序列化合并后的完整文档 → 校验/夹紧 → 原子写 → 按最高生效级别执行 → 回 `PATCH_APPLIED` + 新快照。未知键（例如老版本写的 LLM 配置）留在 `extras` 原样回写，不会被吞掉。
-
-多角色窗口的可选实测回归（需要本地模型和 GPU，会短暂创建桌面窗口）：
-
-```powershell
-$env:BANDORI_PET_TEST_ROOT = "$PWD\run"
-cargo test -p pet-app --test multi_role_runtime -- --ignored --nocapture
-cargo test -p pet-app --test window_input -- --ignored --nocapture
-```
-
-此测试使用独立临时目录，验证 moc / moc3 角色动态添加、错开放置、移除、换装、组合设置更新、缺失模型保留和配置恢复。
-
-`window_input` 回归会短暂移动鼠标，验证 moc / moc3 在鼠标移出窗口及窗口穿透时仍能追踪视线、透明区的 Windows 实际命中目标、模型区恢复交互、拖拽保持、启动隐藏，以及显示/隐藏、缩放和 OBS 切换后穿透与不夺焦仍有效。视线追踪每帧读取系统全局鼠标位置，并换算为窗口局部物理像素坐标。桌宠使用 winit 的 `set_cursor_hittest` 同步穿透状态，并通过 `SetWindowSubclass` 在 `WM_STYLECHANGING` 中保留分层、不激活和工具窗口样式；任务栏隐藏同时交给 winit 管理，OBS 兼容模式也不显示任务栏按钮。两个 exe 都使用 Windows GUI 子系统，启动时不会额外弹出控制台。
-
-**帧序固定**（抄 Neocari `examples/show_model.rs`）：mask pass → main pass（`LoadOp::Clear(alpha=0)`）→ blit 到 swapchain。moc3 的每帧顺序是 `reset_parameters → reset_part_opacities → 覆盖参数（视线/眨眼/呼吸/口型）→ motion tick/apply → expression tick/apply → 位姿交叉淡化 → apply_parameter_overrides → apply_physics → apply_pose → update_meshes`；moc 全部塞在 `Moc2RuntimeModel::update(dt)` 里。
-
-**动作切换是交叉淡化，不是硬切。** Neocari 的 `MotionPlayer` 会把新动作的第一帧整帧写进参数，动作结束时又把参数交回默认值；逐帧切换就会看到姿势瞬移。`pet-live2d` 的 `PoseTransition` 在换动作、动作结束和停止动作时记住上一帧屏幕上的姿势，用 0.28 秒余弦曲线过渡到新姿势，参数与部件透明度一起插值。淡化放在视线/眨眼覆盖参数之前，所以头部追随仍然即时；放在物理之前，所以摆动仍在混合后的姿势上计算。`RoleBehavior` 每次触发只发一条动作命令：动作自己结束后回到休息动作，只有一直不结束的片段才在 9 秒（径向菜单 8 秒）处截断。
-
-**Y 轴方向按格式区分。** Cubism 2 的 `.moc` 坐标是画布像素、原点在左上、y 向下；Cubism 3/4/5 是 y 向上的模型空间。Neocari 的 `moc2::layout` 和 `render_moc2` 示例都写明了这一点，所以 `fit_matrix(..., flip_y)` 对 moc 取负的 y 缩放、对 moc3 保持正向。判错的后果是角色上下颠倒，且 7 区点击区域一起错。回归测试 `crates/pet-app/tests/orientation.rs` 会检查真实模型落在哪种坐标系里。
-
-**命中是 CPU 算的。** 逆变换把光标映射回模型空间 → AABB → 三角形重心坐标 → 用插值 UV 在原分辨率 alpha 缓冲上采样，`> threshold` 才算命中；120ms/12px 内保持上一次命中，避免动画帧让窗口在「可点」和「穿透」之间抖。因此交互完全不碰 GPU 回读。
-
-**窗口留出动作空间，模型按脸部尺寸统一缩放。** 在 100% 缩放、100% DPI 下，两种格式的中立脸部高度均为约 120 像素；moc 使用 FACE 部件，moc3 使用显示元数据中的脸部轮廓，避免全身、半身、发型和服装差异改变上半身观感。没有对应元数据时按格式的常规半身比例回退。窗口在左右各预留相当于半身高度 35%、上下各 15% 的透明空间，伸手、摆头和头发摆动不会紧贴窗口边缘；moc3 保留全身，不裁腿。动作不会触发自动缩放。
-
-**区域比例相对模型内容计算。** 光标通过渲染矩阵的逆变换映射回模型，再按内容包围盒计算 7 区比例；根据模型坐标方向统一 y 轴，新增透明留白不影响点击区域。
-
-**穿透轮询与渲染解耦。** 主线程既渲染又轮询（16ms 近 / 125ms 远），每帧只做一次 AABB 扫描，成本远小于一次 GPU 提交。
-
-**换装是热重载。** 解压新服装 → 重建纹理/网格/裁剪资源 → 首帧，不重启进程；窗口尺寸按新模型的脸部基准和动作空间重新计算，右下角锚定。
-
-**拖拽用全局光标。** 用窗口内局部坐标算位移会形成回授（窗口一动，局部坐标就变小），实测只会跟上 60%；改成「按下时的屏幕坐标 + 当前屏幕坐标」后 1:1 跟手。
-
-## 许可
-
-- 本项目：GPL-3.0-only。
-- `vendor/neocari`：Neocari，GPL-3.0-only（与本项目同协议），改动见 `vendor/neocari/PATCHES.md`。
-- Live2D 模型与角色素材版权属于 Craft Egg / Bushiroad，本仓库不包含任何模型文件。
-
-
-## 参考资料
-
-- `docs/reference/BANDORI-PET-REV-behavior-spec.md`：从 `BANDORI-PET-REV` 的 Python 源码里逐条挖出来的行为数据（7 区预设表、4 级名称匹配、标签→表情表、AUTO 桶、情绪位移关键帧、托盘/径向菜单几何、所有常量）。实现时按它对齐；两处与规格不同的实测结论（径向菜单无长按、视线死区是 4px）也记在里面。
-
+本项目采用 GPL-3.0-only 许可，详见 [LICENSE](LICENSE)。随仓库提供的 Neocari 同样采用 GPL-3.0-only，相关说明见 [NOTICE.md](NOTICE.md)。Live2D 模型与角色素材版权属于 Craft Egg / Bushiroad；本仓库不包含模型文件。

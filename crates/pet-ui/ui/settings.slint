@@ -149,11 +149,8 @@ export component SettingsWindow inherits Window {
                 NavButton { text: "角色行为"; icon: @image-url("icons/behavior.svg"); tint: #ff902c; active: root.page == 2; clicked => { root.page = 2; } }
                 NavButton { text: "显示设置"; icon: @image-url("icons/display.svg"); tint: #00d976; active: root.page == 1; clicked => { root.page = 1; } }
                 NavButton { text: "模型下载与更新"; icon: @image-url("icons/download.svg"); tint: #4a9eff; active: root.page == 4; clicked => { root.page = 4; } }
-                NavButton { text: "关于"; icon: @image-url("icons/about.svg"); tint: #a7b0bf; active: root.page == 3; clicked => { root.page = 3; } }
                 Rectangle { vertical-stretch: 1; background: transparent; }
-                Hint { text: "BANDORI-PET-LITE"; font-size: 11px; horizontal-alignment: center; }
-                Hint { text: "轻量桌宠 · 与你相伴"; font-size: 11px; horizontal-alignment: center; }
-                Rectangle { height: 4px; background: transparent; }
+                NavButton { text: "关于"; icon: @image-url("icons/about.svg"); tint: #a7b0bf; active: root.page == 3; clicked => { root.page = 3; } }
             }
         }
         Rectangle { width: 1px; background: Colors.border; }
@@ -519,7 +516,6 @@ export component SettingsWindow inherits Window {
                 if root.page == 3 : VerticalLayout {
                     spacing: 18px;
                     Body { text: "关于"; font-size: 28px; font-weight: 700; height: 40px; }
-                    Hint { text: "BANDORI-PET-LITE · 轻量的 Bandori 桌面陪伴"; }
                     ScrollView {
                         content-width: self.visible-width;
                         VerticalLayout {
@@ -546,7 +542,7 @@ export component SettingsWindow inherits Window {
                     }
                 }
             }
-            Hint { text: root.status; font-size: 11px; height: 16px; }
+            if root.status != "" : Hint { text: root.status; font-size: 11px; height: 16px; }
         }
     }
     }

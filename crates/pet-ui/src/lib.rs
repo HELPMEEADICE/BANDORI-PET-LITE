@@ -331,7 +331,7 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                     let was_connected = pump_shared.connected.swap(true, Ordering::Relaxed);
                     window.set_first_run(first_run);
                     if !was_connected {
-                        window.set_status("已连接桌宠进程".into());
+                        window.set_status("".into());
                     }
                     pump_picker.update_config(&window, &parsed);
                     apply_config_to_window(
