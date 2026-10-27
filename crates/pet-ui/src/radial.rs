@@ -74,10 +74,10 @@ pub(crate) fn initialize_backend() -> Result<Rc<Cell<bool>>, slint::PlatformErro
             };
             #[cfg(target_os = "linux")]
             let attributes = {
-                use slint::winit_030::winit::platform::x11::{WindowAttributesExtX11, XWindowType};
+                use slint::winit_030::winit::platform::x11::{WindowAttributesExtX11, WindowType};
                 attributes
                     .with_name("bandori-ui", "BANDORI-PET-LITE")
-                    .with_x11_window_type(vec![XWindowType::Utility])
+                    .with_x11_window_type(vec![WindowType::Utility])
             };
             attributes
         })

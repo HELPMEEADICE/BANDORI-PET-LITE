@@ -195,10 +195,10 @@ impl Role {
         let attributes = attributes.with_skip_taskbar(true);
         #[cfg(target_os = "linux")]
         let attributes = {
-            use winit::platform::x11::{WindowAttributesExtX11, XWindowType};
+            use winit::platform::x11::{WindowAttributesExtX11, WindowType};
             attributes
                 .with_name("bandori-pet", "BANDORI-PET-LITE")
-                .with_x11_window_type(vec![XWindowType::Utility])
+                .with_x11_window_type(vec![WindowType::Utility])
         };
         #[cfg(target_os = "macos")]
         let attributes = {
