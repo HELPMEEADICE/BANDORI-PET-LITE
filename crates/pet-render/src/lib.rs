@@ -171,7 +171,7 @@ impl Gpu {
     }
 }
 
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 fn preferred_device_class(allow_hardware: bool, device_type: wgpu::DeviceType) -> bool {
     device_type
         == if allow_hardware {
