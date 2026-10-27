@@ -403,6 +403,10 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                     pump_radial.dismiss();
                 }
                 Message::OpenSettings { page } => {
+                    if page == SettingsPage::Model {
+                        pump_picker.close_preview(&window);
+                        reset_role_list(&window);
+                    }
                     window.set_page(page_index(page));
                     let _ = window.show();
                 }
@@ -442,6 +446,12 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
     let _ = window.hide();
     radial_controller.hide();
     result.map_err(UiError::Slint)
+}
+
+fn reset_role_list(window: &SettingsWindow) {
+    window.set_picking_model(false);
+    window.set_adding_model(false);
+    window.set_import_visible(false);
 }
 
 fn page_index(page: SettingsPage) -> i32 {
@@ -642,9 +652,6 @@ fn apply_config_to_window(
             .map(|index| index as i32)
             .unwrap_or(-1),
     );
-    if config.models.is_empty() {
-        window.set_picking_model(true);
-    }
     let character = catalog.character(&config.character);
     window.set_active_character_label(
         character
@@ -1009,6 +1016,12 @@ mod tests {
             .unwrap();
         switch.invoke_accessible_default_action();
         assert!(window.get_picking_model());
+        window.set_adding_model(true);
+        window.set_import_visible(true);
+        reset_role_list(&window);
+        assert!(!window.get_picking_model());
+        assert!(!window.get_adding_model());
+        assert!(!window.get_import_visible());
 
         // Optional review artifacts use a locally supplied portrait. The
         // regression assertions above always use the oversized synthetic image.

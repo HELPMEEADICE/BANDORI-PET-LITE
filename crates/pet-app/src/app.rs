@@ -78,9 +78,8 @@ impl PetApp {
         let mut config = load.config.clone();
         config.normalize_models();
 
-        // Scan on first run or without configured roles to route setup to the
-        // download page when empty. Existing configured installations keep the
-        // lazy scan so the pet can present its first frame promptly (spec §2.9).
+        // Scan on first run or without configured roles. Existing configured
+        // installations keep the lazy scan so the first frame appears promptly.
         let catalog = if load.is_first_run() || config.models.is_empty() {
             Some(Self::scan_catalog(&paths))
         } else {
@@ -141,7 +140,7 @@ impl PetApp {
         if catalog.is_empty() {
             warn!(
                 models = %paths.models().display(),
-                "no models found; the settings window will open on the downloads page"
+                "no models found; use the settings window to download models"
             );
         }
         catalog
@@ -203,23 +202,14 @@ impl PetApp {
         }
         if !self.ensure_role_entries() {
             warn!("no model available to display");
-            self.open_settings(SettingsPage::Downloads);
+            self.open_settings(SettingsPage::Model);
             return;
         }
         self.reconcile_roles(event_loop);
         if self.roles.is_empty() {
-            let page = self.model_settings_page();
-            self.open_settings(page);
+            self.open_settings(SettingsPage::Model);
         } else if self.load.is_first_run() {
             self.open_settings(SettingsPage::Model);
-        }
-    }
-
-    fn model_settings_page(&mut self) -> SettingsPage {
-        if self.ensure_catalog().is_empty() {
-            SettingsPage::Downloads
-        } else {
-            SettingsPage::Model
         }
     }
 
@@ -686,7 +676,7 @@ impl PetApp {
                     role.play_menu_motion(now);
                 }
             }
-            "settings" => self.open_settings(SettingsPage::Display),
+            "settings" => self.open_settings(SettingsPage::Model),
             "hide" => {
                 self.hidden = true;
                 for role in &mut self.roles {
@@ -750,7 +740,7 @@ impl PetApp {
                     self.persist_now();
                 }
                 TrayEvent::ResetPositions => self.reset_positions(),
-                TrayEvent::OpenSettings => self.open_settings(SettingsPage::Display),
+                TrayEvent::OpenSettings => self.open_settings(SettingsPage::Model),
                 TrayEvent::Quit => self.quit = true,
             }
         }
@@ -1079,20 +1069,19 @@ mod tests {
     use std::sync::mpsc::channel;
 
     #[test]
-    fn missing_or_invalid_models_route_to_downloads_and_installed_models_to_picker() {
+    fn missing_or_invalid_models_are_not_added_as_roles() {
         let root = tempfile::tempdir().unwrap();
         let session = format!("model-startup-{}", std::process::id());
         let mut app = PetApp::new_with(Paths::with_root(root.path()), &session, false).unwrap();
         assert!(app.load.is_first_run());
         assert!(!app.ensure_role_entries());
-        assert_eq!(app.model_settings_page(), SettingsPage::Downloads);
 
         std::fs::create_dir_all(root.path().join("models")).unwrap();
         std::fs::write(root.path().join("models/kasumi.zst"), b"broken model").unwrap();
         app.handle_ipc_message(Message::ModelsChanged {
             characters: vec!["kasumi".into()],
         });
-        assert_eq!(app.model_settings_page(), SettingsPage::Downloads);
+        assert!(!app.ensure_role_entries());
 
         let file = std::fs::File::create(root.path().join("models/kasumi.zst")).unwrap();
         let encoder = zstd::stream::write::Encoder::new(file, 1).unwrap();
@@ -1107,9 +1096,25 @@ mod tests {
         app.handle_ipc_message(Message::ModelsChanged {
             characters: vec!["kasumi".into()],
         });
-        assert_eq!(app.model_settings_page(), SettingsPage::Model);
         assert!(app.ensure_role_entries());
         assert_eq!(app.config.models[0].character, "kasumi");
+    }
+
+    #[test]
+    fn settings_menu_and_tray_open_the_role_list() {
+        let root = tempfile::tempdir().unwrap();
+        let session = format!("settings-entry-{}", std::process::id());
+        let mut app = PetApp::new_with(Paths::with_root(root.path()), &session, false).unwrap();
+        app.handle_menu_action("settings");
+        assert_eq!(app.pending_settings_page, Some(SettingsPage::Model));
+        app.pending_settings_page = None;
+        app.tray_sender
+            .as_ref()
+            .unwrap()
+            .send(TrayEvent::OpenSettings)
+            .unwrap();
+        app.drain_tray();
+        assert_eq!(app.pending_settings_page, Some(SettingsPage::Model));
     }
 
     #[test]
