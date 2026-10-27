@@ -32,6 +32,10 @@ pub struct Tray {
 impl Tray {
     /// Builds the tray icon and menu.
     pub fn new(sender: Sender<TrayEvent>) -> Result<Self, Box<dyn std::error::Error>> {
+        // winit does not initialize or dispatch GTK. AppIndicator and muda must
+        // be created and pumped on this same event-loop thread.
+        #[cfg(target_os = "linux")]
+        gtk::init()?;
         let menu = Menu::new();
         let mut ids = Vec::new();
 
@@ -82,6 +86,10 @@ impl Tray {
 
     /// Polls the global muda menu event queue and forwards mapped actions.
     pub fn poll(&mut self) {
+        #[cfg(target_os = "linux")]
+        while gtk::events_pending() {
+            gtk::main_iteration_do(false);
+        }
         while let Ok(event) = TrayIconEvent::receiver().try_recv() {
             if event.id() == self._icon.id()
                 && matches!(

@@ -17,7 +17,7 @@ pub struct Paths {
 
 impl Paths {
     /// Discovers the data root: `$BANDORI_PET_ROOT`, else Application Support on
-    /// macOS or the executable directory on Windows.
+    /// macOS, XDG data home on Linux or the executable directory on Windows.
     pub fn discover() -> Self {
         #[cfg(target_os = "macos")]
         if let (Ok(exe), Some(home)) = (std::env::current_exe(), std::env::var_os("HOME")) {
@@ -25,6 +25,16 @@ impl Paths {
                 &exe,
                 Path::new(&home),
                 std::env::var_os(ROOT_ENV).map(PathBuf::from),
+            );
+        }
+        #[cfg(target_os = "linux")]
+        if let (Ok(exe), Some(home)) = (std::env::current_exe(), std::env::var_os("HOME")) {
+            return Self::linux_layout(
+                &exe,
+                Path::new(&home),
+                std::env::var_os(ROOT_ENV).map(PathBuf::from),
+                std::env::var_os("XDG_DATA_HOME").map(PathBuf::from),
+                std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from),
             );
         }
         let root = std::env::var_os(ROOT_ENV)
@@ -69,6 +79,31 @@ impl Paths {
             cache: home.join("Library/Caches/BandoriPetLite/cache"),
             executable_dir,
             bundled_assets,
+        }
+    }
+
+    #[cfg(any(target_os = "linux", test))]
+    fn linux_layout(
+        exe: &Path,
+        home: &Path,
+        root: Option<PathBuf>,
+        data_home: Option<PathBuf>,
+        cache_home: Option<PathBuf>,
+    ) -> Self {
+        let executable_dir = exe.parent().unwrap_or(Path::new(".")).to_path_buf();
+        Self {
+            root: root.unwrap_or_else(|| {
+                data_home
+                    .filter(|path| path.is_absolute())
+                    .unwrap_or_else(|| home.join(".local/share"))
+                    .join("BandoriPetLite")
+            }),
+            cache: cache_home
+                .filter(|path| path.is_absolute())
+                .unwrap_or_else(|| home.join(".cache"))
+                .join("BandoriPetLite/cache"),
+            bundled_assets: Some(executable_dir.join("assets")),
+            executable_dir,
         }
     }
 
@@ -146,7 +181,14 @@ fn local_app_data() -> Option<PathBuf> {
     {
         std::env::var_os("HOME").map(|home| PathBuf::from(home).join("Library/Caches"))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        std::env::var_os("XDG_CACHE_HOME")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
 }
 
@@ -217,5 +259,56 @@ mod tests {
             Some(Path::new("/build/target/debug"))
         );
         assert_eq!(paths.assets(), PathBuf::from("/custom/data/assets"));
+    }
+
+    #[test]
+    fn linux_layout_uses_xdg_and_keeps_binaries_outside_writable_data() {
+        let data = std::env::temp_dir().join("bandori-layout-data");
+        let cache = std::env::temp_dir().join("bandori-layout-cache");
+        let paths = Paths::linux_layout(
+            Path::new("/opt/bandori/bandori-pet"),
+            Path::new("/home/test"),
+            None,
+            Some(data.clone()),
+            Some(cache.clone()),
+        );
+        assert_eq!(paths.config(), data.join("BandoriPetLite/config.json"));
+        assert_eq!(paths.cache(), cache.join("BandoriPetLite/cache"));
+        assert_eq!(paths.assets(), PathBuf::from("/opt/bandori/assets"));
+        assert_eq!(
+            paths.ui_executable().parent(),
+            Some(Path::new("/opt/bandori"))
+        );
+    }
+
+    #[test]
+    fn linux_ignores_relative_xdg_paths_and_preserves_root_override() {
+        let paths = Paths::linux_layout(
+            Path::new("/opt/bandori/bandori-pet"),
+            Path::new("/home/test"),
+            None,
+            Some(PathBuf::from("relative")),
+            Some(PathBuf::new()),
+        );
+        assert_eq!(
+            paths.root(),
+            Path::new("/home/test/.local/share/BandoriPetLite")
+        );
+        assert_eq!(
+            paths.cache(),
+            Path::new("/home/test/.cache/BandoriPetLite/cache")
+        );
+        let custom = Paths::linux_layout(
+            Path::new("/opt/bandori/bandori-pet"),
+            Path::new("/home/test"),
+            Some(PathBuf::from("/custom")),
+            None,
+            None,
+        );
+        assert_eq!(custom.root(), Path::new("/custom"));
+        assert_eq!(
+            custom.pet_executable().parent(),
+            Some(Path::new("/opt/bandori"))
+        );
     }
 }

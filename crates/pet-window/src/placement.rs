@@ -74,8 +74,14 @@ pub fn monitors() -> Vec<MonitorInfo> {
     crate::macos::monitors(None)
 }
 
+/// Enumerates XRandR monitors and EWMH work areas in physical pixels.
+#[cfg(target_os = "linux")]
+pub fn monitors() -> Vec<MonitorInfo> {
+    crate::x11::monitors()
+}
+
 /// Enumerates all monitors (unsupported-platform stub).
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 pub fn monitors() -> Vec<MonitorInfo> {
     vec![MonitorInfo {
         name: "display1".to_owned(),
@@ -359,7 +365,11 @@ pub fn auto_start_enabled(exe: &Path) -> bool {
     {
         crate::launch_agent::enabled(exe)
     }
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(target_os = "linux")]
+    {
+        crate::autostart::enabled(exe)
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
         let _ = exe;
         false
@@ -376,7 +386,11 @@ pub fn set_auto_start(exe: &Path, enabled: bool) -> std::io::Result<()> {
     {
         crate::launch_agent::set_enabled(exe, enabled)
     }
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(target_os = "linux")]
+    {
+        crate::autostart::set_enabled(exe, enabled)
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
         let _ = (exe, enabled);
         Ok(())

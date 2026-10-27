@@ -14,5 +14,5 @@ interprocess.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 
-[target.'cfg(target_os = "macos")'.dependencies]
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 libc.workspace = true

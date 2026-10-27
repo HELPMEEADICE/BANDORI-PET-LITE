@@ -1,5 +1,5 @@
 //! Animated popup and its native circular input region. Transparent gaps are
-//! excluded from the HWND, so input reaches windows in other processes too.
+//! excluded from input, so clicks reach windows in other processes too.
 
 use std::cell::Cell;
 #[cfg(any(windows, test))]
@@ -25,6 +25,17 @@ pub(crate) fn initialize_backend() -> Result<Rc<Cell<bool>>, slint::PlatformErro
     let creating_popup = Rc::new(Cell::new(false));
     let popup = Rc::clone(&creating_popup);
     let backend = slint::BackendSelector::new();
+    #[cfg(target_os = "linux")]
+    let backend = {
+        use slint::winit_030::winit::platform::x11::EventLoopBuilderExtX11;
+        let mut builder = slint::winit_030::winit::event_loop::EventLoop::<
+            slint::winit_030::SlintEvent,
+        >::with_user_event();
+        builder.with_x11();
+        backend
+            .backend_name("winit".into())
+            .with_winit_event_loop_builder(builder)
+    };
     #[cfg(target_os = "macos")]
     let backend = {
         use slint::winit_030::winit::platform::macos::{
@@ -60,6 +71,13 @@ pub(crate) fn initialize_backend() -> Result<Rc<Cell<bool>>, slint::PlatformErro
                 attributes
                     .with_has_shadow(false)
                     .with_accepts_first_mouse(true)
+            };
+            #[cfg(target_os = "linux")]
+            let attributes = {
+                use slint::winit_030::winit::platform::x11::{WindowAttributesExtX11, XWindowType};
+                attributes
+                    .with_name("bandori-ui", "BANDORI-PET-LITE")
+                    .with_x11_window_type(vec![XWindowType::Utility])
             };
             attributes
         })
@@ -256,25 +274,26 @@ impl Controller {
     fn update_native(&self, menu: &RadialMenu) {
         #[cfg(windows)]
         self.native.update(menu);
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         menu.window().with_winit_window(|window| {
+            #[cfg(target_os = "macos")]
             pet_window::macos::apply_overlay_style(window);
-            let outside = macos_outside(menu, window);
+            let outside = desktop_outside(menu, window);
             let _ = window.set_cursor_hittest(!outside);
         });
-        #[cfg(not(any(windows, target_os = "macos")))]
+        #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
         let _ = menu;
     }
 
     fn outside(&self, menu: &RadialMenu) -> bool {
         #[cfg(windows)]
         return self.native.outside(menu);
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         return menu
             .window()
-            .with_winit_window(|window| macos_outside(menu, window))
+            .with_winit_window(|window| desktop_outside(menu, window))
             .unwrap_or(false);
-        #[cfg(not(any(windows, target_os = "macos")))]
+        #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
         {
             let _ = menu;
             false
@@ -296,7 +315,11 @@ fn mouse_down() -> bool {
     {
         pet_window::macos::mouse_down()
     }
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(target_os = "linux")]
+    {
+        pet_window::x11::mouse_down()
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
         false
     }
@@ -381,9 +404,13 @@ fn place(menu: &RadialMenu, x: i32, y: i32) {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn macos_outside(menu: &RadialMenu, window: &slint::winit_030::winit::window::Window) -> bool {
-    let Some((x, y)) = pet_window::macos::cursor_position(window) else {
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn desktop_outside(menu: &RadialMenu, window: &slint::winit_030::winit::window::Window) -> bool {
+    #[cfg(target_os = "macos")]
+    let cursor = pet_window::macos::cursor_position(window);
+    #[cfg(target_os = "linux")]
+    let cursor = pet_window::x11::cursor_position();
+    let Some((x, y)) = cursor else {
         return false;
     };
     let Ok(position) = window.outer_position() else {
@@ -404,7 +431,7 @@ fn macos_outside(menu: &RadialMenu, window: &slint::winit_030::winit::window::Wi
     )
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 fn inside_circles(
     x: f32,
     y: f32,

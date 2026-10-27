@@ -1,4 +1,4 @@
-//! Single-instance guard (named mutex) shared by the pet process.
+//! Single-instance guard: Windows named mutex or a per-user Unix file lock.
 
 /// Name of the per-session mutex.
 pub const MUTEX_NAME: &str = r"Local\BandoriPetLite-SingleInstance";
@@ -35,9 +35,9 @@ pub fn acquire() -> (Instance, Option<MutexGuard>) {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn acquire() -> (Instance, Option<MutexGuard>) {
-    match acquire_macos() {
+    match acquire_unix() {
         Ok(result) => result,
         Err(error) => {
             tracing::error!(%error, "could not acquire single-instance lock");
@@ -47,16 +47,19 @@ pub fn acquire() -> (Instance, Option<MutexGuard>) {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn acquire_macos() -> std::io::Result<(Instance, Option<MutexGuard>)> {
-    let home = std::env::var_os("HOME")
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "HOME is not set"))?;
-    let directory = std::path::PathBuf::from(home).join("Library/Caches/BandoriPetLite");
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn acquire_unix() -> std::io::Result<(Instance, Option<MutexGuard>)> {
+    let directory = pet_config::Paths::discover().local_data().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "user cache directory is unavailable",
+        )
+    })?;
     std::fs::create_dir_all(&directory)?;
     acquire_lock(&directory.join("instance.lock"))
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn acquire_lock(path: &std::path::Path) -> std::io::Result<(Instance, Option<MutexGuard>)> {
     use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::io::AsRawFd;
@@ -82,7 +85,7 @@ fn acquire_lock(path: &std::path::Path) -> std::io::Result<(Instance, Option<Mut
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 pub fn acquire() -> (Instance, Option<MutexGuard>) {
     (Instance::Primary, None)
 }
@@ -91,7 +94,7 @@ pub fn acquire() -> (Instance, Option<MutexGuard>) {
 pub struct MutexGuard {
     #[cfg(windows)]
     handle: windows::Win32::Foundation::HANDLE,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     _file: std::fs::File,
 }
 
@@ -103,7 +106,7 @@ impl Drop for MutexGuard {
     }
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod tests {
     use super::*;
 

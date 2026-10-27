@@ -193,6 +193,13 @@ impl Role {
                 .with_position(PhysicalPosition::new(decision.x, decision.y));
         #[cfg(windows)]
         let attributes = attributes.with_skip_taskbar(true);
+        #[cfg(target_os = "linux")]
+        let attributes = {
+            use winit::platform::x11::{WindowAttributesExtX11, XWindowType};
+            attributes
+                .with_name("bandori-pet", "BANDORI-PET-LITE")
+                .with_x11_window_type(vec![XWindowType::Utility])
+        };
         #[cfg(target_os = "macos")]
         let attributes = {
             use winit::platform::macos::WindowAttributesExtMacOS;
@@ -216,6 +223,8 @@ impl Role {
 
         #[cfg(target_os = "macos")]
         pet_window::macos::apply_overlay_style(&window);
+        #[cfg(target_os = "linux")]
+        pet_window::x11::apply_overlay_style(&window);
 
         #[cfg(windows)]
         {
@@ -1028,7 +1037,11 @@ fn global_cursor(window: &Window) -> Option<(f32, f32)> {
     {
         pet_window::macos::cursor_position(window)
     }
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(target_os = "linux")]
+    {
+        pet_window::x11::cursor_position()
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
         None
     }

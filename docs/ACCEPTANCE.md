@@ -3,6 +3,8 @@
 对应 `../BANDORI-PET-REV/docs/BANDORI-PET-LITE.md` §7。每条给出「怎么验的」和「实测值」。
 测试机器：Windows 11，RTX 5080 Laptop，Vulkan 后端，显示器 DPR 1.5，主屏工作区 2532×1536 物理像素。
 
+以下实测证据适用于上述 Windows 环境；Linux（X11）的实现、CI 覆盖范围与待完成的真机验收见 [Linux 支持说明](LINUX.md)，macOS 见 [macOS 支持说明](MACOS.md)。
+
 | # | 验收项 | 结果 | 证据 |
 |---|---|---|---|
 | 1 | 冷启动 ≤1.5s 出画面 | ✅ | release：进程内 `role ready ms=1101`，外部轮询 `IsWindowVisible` 首帧可见 **1540ms**（含 PowerShell `Start-Process` 约 300–400ms 的建进程开销）。debug 版因 300MB 调试符号页入会多 1s 左右。首帧在 `Role::create` 内同步呈现后才 `set_visible(true)`；启动时不再扫描 64 个归档（改为 `ensure_catalog` 惰性扫描），托盘也延后到首帧之后创建。 |

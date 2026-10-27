@@ -19,6 +19,15 @@ pub const PIPE_BASE: &str = "bandori-pet-lite";
 
 #[cfg(not(target_os = "macos"))]
 fn socket_name(name: &str) -> std::io::Result<Name<'_>> {
+    // Linux abstract sockets share a machine-wide namespace, unlike Windows
+    // named pipes. Include the uid so separate users can run their own pet.
+    #[cfg(target_os = "linux")]
+    {
+        format!("{}-{name}", unsafe { libc::geteuid() })
+            .to_ns_name::<GenericNamespaced>()
+            .map(Name::into_owned)
+    }
+    #[cfg(not(target_os = "linux"))]
     name.to_ns_name::<GenericNamespaced>()
 }
 

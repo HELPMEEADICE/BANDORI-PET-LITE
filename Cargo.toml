@@ -82,6 +82,8 @@ tempfile = "3"
 pollster = "1"
 interprocess = "2.4"
 libc = "0.2"
+x11rb = { version = "0.13.2", features = ["randr", "shape"] }
+gtk = "0.18"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSEvent", "NSResponder", "NSScreen", "NSView", "NSWindow", "NSGraphics", "objc2-core-foundation"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSEnumerator", "NSGeometry", "NSDictionary", "NSValue", "NSString"] }

@@ -13,6 +13,12 @@ pub mod win32;
 #[cfg(target_os = "macos")]
 pub mod macos;
 
+#[cfg(target_os = "linux")]
+pub mod x11;
+
+#[cfg(any(target_os = "linux", test))]
+mod autostart;
+
 #[cfg(any(target_os = "macos", test))]
 mod launch_agent;
 

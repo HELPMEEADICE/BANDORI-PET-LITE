@@ -1061,6 +1061,11 @@ impl PetApp {
 pub fn run(paths: Paths) -> AppResult<()> {
     let app = PetApp::new(paths)?;
     let mut builder = winit::event_loop::EventLoop::builder();
+    #[cfg(target_os = "linux")]
+    {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        builder.with_x11();
+    }
     #[cfg(target_os = "macos")]
     {
         use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};

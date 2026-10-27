@@ -97,7 +97,7 @@ pub fn local_hour() -> u32 {
             return hour % 24;
         }
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     if std::env::var_os("BANDORI_PET_UTC_OFFSET").is_none() {
         let timestamp = unsafe { libc::time(std::ptr::null_mut()) };
         let mut local = std::mem::MaybeUninit::<libc::tm>::uninit();

@@ -103,6 +103,59 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps --locked
 
+  linux:
+    name: Linux X11 check, build and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Install X11, GTK and test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev libxdo-dev \
+            libx11-dev libxrandr-dev libxi-dev libxcursor-dev libxinerama-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libvulkan-dev libegl1-mesa-dev \
+            libfontconfig1-dev xvfb xauth dbus-x11
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Check Rust and compile Slint UI
+        run: cargo check --workspace --all-targets --locked
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Build both application binaries
+        run: cargo build --workspace --bins --locked
+      - name: Unit and integration tests
+        run: cargo test --workspace --all-targets --locked
+      - name: Documentation tests
+        run: cargo test --workspace --doc --locked
+      - name: X11 pointer, monitor and click-through test
+        run: xvfb-run -a cargo test -p pet-window --test x11 --locked -- --ignored --test-threads=1
+      - name: Two-process startup and shutdown under X11
+        shell: bash
+        run: |
+          root="$(mktemp -d)"
+          export BANDORI_PET_ROOT="$root"
+          export BANDORI_PET_HEADLESS=1
+          export BANDORI_PET_EXIT_AFTER_SECS=5
+          export SLINT_BACKEND=winit-software
+          export RUST_LOG=info
+          dbus-run-session -- xvfb-run -a timeout 30s target/debug/bandori-pet
+          rg 'settings process connected' "$root/logs"
+          rg 'bandori-ui exited' "$root/logs"
+      - name: Package Linux binaries
+        run: bash scripts/package-linux.sh --debug --skip-build
+      - name: Upload Linux application
+        uses: actions/upload-artifact@v6
+        with:
+          name: BANDORI-PET-LITE-x86_64-unknown-linux-gnu-debug
+          path: dist/linux-x86_64-unknown-linux-gnu-debug/BANDORI-PET-LITE.tar.gz
+          if-no-files-found: error
+
   macos:
     name: macOS (${{ matrix.target }}) check, build and tests
     strategy:
