@@ -459,9 +459,9 @@ impl Default for Config {
 
             live2d_head_tracking_enabled: true,
             live2d_mutual_gaze_enabled: false,
-            live2d_idle_actions_enabled: true,
-            live2d_random_actions_enabled: true,
-            emotion_behavior_enabled: true,
+            live2d_idle_actions_enabled: false,
+            live2d_random_actions_enabled: false,
+            emotion_behavior_enabled: false,
 
             click_motion_active_profile: String::new(),
             click_motion_actions: default_click_actions(),
@@ -602,6 +602,20 @@ mod tests {
         assert_eq!(config.opacity, 1.0);
         assert!(config.click_motion_actions.contains_key("head"));
         assert_eq!(config.click_motion_actions.len(), 7);
+        assert!(!config.live2d_idle_actions_enabled);
+        assert!(!config.live2d_random_actions_enabled);
+        assert!(!config.emotion_behavior_enabled);
+    }
+
+    #[test]
+    fn saved_behavior_options_remain_enabled() {
+        let config: Config = serde_json::from_str(
+            r#"{"live2d_idle_actions_enabled":true,"live2d_random_actions_enabled":true,"emotion_behavior_enabled":true}"#,
+        )
+        .expect("parse");
+        assert!(config.live2d_idle_actions_enabled);
+        assert!(config.live2d_random_actions_enabled);
+        assert!(config.emotion_behavior_enabled);
     }
 
     #[test]
