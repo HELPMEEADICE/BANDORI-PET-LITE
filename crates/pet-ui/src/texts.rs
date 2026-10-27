@@ -229,15 +229,8 @@ mod tests {
 
     #[test]
     fn every_language_renders_and_exposes_its_labels() {
-        use i_slint_backend_testing::{TestingBackend, TestingBackendOptions};
         use slint::ComponentHandle;
-        slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions {
-            renderer_name: Some("software".into()),
-            mock_time: true,
-            ..Default::default()
-        })))
-        .ok();
-        let window = SettingsWindow::new().unwrap();
+        let window = crate::tests::test_window();
         window
             .window()
             .set_size(slint::LogicalSize::new(1180., 680.));
@@ -297,15 +290,8 @@ mod tests {
 
     #[test]
     fn picker_and_import_dialog_show_the_selected_language() {
-        use i_slint_backend_testing::{TestingBackend, TestingBackendOptions};
         use slint::ComponentHandle;
-        slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions {
-            renderer_name: Some("software".into()),
-            mock_time: true,
-            ..Default::default()
-        })))
-        .ok();
-        let window = SettingsWindow::new().unwrap();
+        let window = crate::tests::test_window();
         window
             .window()
             .set_size(slint::LogicalSize::new(1180., 680.));

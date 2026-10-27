@@ -930,11 +930,28 @@ fn option_index(value: &str, options: &[slint::SharedString]) -> i32 {
 mod tests {
     use super::*;
 
-    /// A window with the default language applied, for tests that assert labels.
+    /// A window with the software testing backend and the default language.
+    ///
+    /// Slint's platform context is thread-local, so every test thread installs
+    /// the testing backend itself. Without it a test that builds the first window
+    /// of its thread falls back to the platform backend, which needs a display on
+    /// Linux and the main thread on macOS.
     pub(super) fn test_window() -> SettingsWindow {
+        init_test_backend();
         let window = SettingsWindow::new().unwrap();
         texts::apply(&window, Lang::ZhHans);
         window
+    }
+
+    /// Installs the software testing backend once per test thread.
+    pub(super) fn init_test_backend() {
+        use i_slint_backend_testing::{TestingBackend, TestingBackendOptions};
+        let _ =
+            slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions {
+                renderer_name: Some("software".into()),
+                mock_time: true,
+                ..Default::default()
+            })));
     }
 
     pub(super) fn settle_animations(window: &SettingsWindow) {
