@@ -1,6 +1,6 @@
 //! The `models/<archive>.zst::<costume>/model.json` virtual path syntax.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 /// Separator between the archive path and the member path.
 pub const SEP: &str = "::";
@@ -86,8 +86,18 @@ impl ModelPath {
 }
 
 /// Normalizes an archive member path, rejecting absolute paths and `..`.
+///
+/// The absolute-path rules are applied to the text itself instead of through
+/// `Path::is_absolute`: an archive written on Windows is unpacked on Linux and
+/// macOS (and the reverse), so `C:/windows/system32/x.json` must be refused
+/// everywhere even though only Windows parses it as absolute.
 pub fn normalize_member(member: &str) -> Result<String, VirtualPathError> {
     let unified = member.replace('\\', "/");
+    // Root-relative `/x`, UNC and device paths (`//server/share`, `\\?\C:`,
+    // `\\.\C:`) and Windows drive prefixes (`C:`, `C:/x`, `C:x`).
+    if unified.starts_with('/') || has_windows_drive_prefix(&unified) {
+        return Err(VirtualPathError::UnsafeMember(member.to_owned()));
+    }
     let mut parts = Vec::new();
     for component in unified.split('/') {
         match component {
@@ -99,14 +109,14 @@ pub fn normalize_member(member: &str) -> Result<String, VirtualPathError> {
     if parts.is_empty() {
         return Err(VirtualPathError::UnsafeMember(member.to_owned()));
     }
-    let normalized = parts.join("/");
-    // Double-check with the platform parser: Windows also treats `C:` and UNC
-    // prefixes as absolute, which `split('/')` alone would not catch.
-    let path = Path::new(&normalized);
-    if path.is_absolute() || path.components().any(|c| matches!(c, Component::Prefix(_))) {
-        return Err(VirtualPathError::UnsafeMember(member.to_owned()));
-    }
-    Ok(normalized)
+    Ok(parts.join("/"))
+}
+
+/// `true` for `C:`, `C:/x` and `C:x`: a Windows drive prefix is absolute or
+/// drive-relative and never a valid archive member, on any host.
+fn has_windows_drive_prefix(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
 #[cfg(test)]
@@ -140,10 +150,24 @@ mod tests {
         for spec in [
             "models/kasumi.zst::../evil/model.json",
             "models/kasumi.zst::C:/windows/system32/x.json",
+            "models/kasumi.zst::C:model.json",
+            "models/kasumi.zst::\\\\server\\share\\model.json",
+            "models/kasumi.zst::/etc/passwd",
             "models/kasumi.zst::",
         ] {
             assert!(ModelPath::parse(spec).is_err(), "{spec} should be rejected");
         }
+    }
+
+    #[test]
+    fn drive_prefixes_are_rejected_on_every_platform() {
+        for member in ["C:/x/model.json", "c:/x", "C:model.json", "Z:model.json"] {
+            assert_eq!(
+                normalize_member(member),
+                Err(VirtualPathError::UnsafeMember(member.to_owned()))
+            );
+        }
+        assert_eq!(normalize_member("live_default").unwrap(), "live_default");
     }
 
     #[test]
