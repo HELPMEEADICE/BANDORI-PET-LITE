@@ -1,0 +1,315 @@
+name: Build installers
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installers-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  metadata:
+    name: Read package version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: version
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, re, tomllib
+          with open('Cargo.toml', 'rb') as source:
+              version = tomllib.load(source)['workspace']['package']['version']
+          match = re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?', version)
+          if not match or any(int(n) > limit for n, limit in zip(match.groups(), (255, 255, 65535))):
+              raise SystemExit('Package version must be SemVer without build metadata and fit MSI version limits')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print(f'version={version}', file=output)
+          PY
+
+  windows:
+    name: Windows / ${{ matrix.arch }} / MSI, EXE, ZIP
+    needs: metadata
+    runs-on: windows-2022
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-pc-windows-msvc
+            msvc: amd64
+          - arch: aarch64
+            target: aarch64-pc-windows-msvc
+            msvc: amd64_arm64
+    env:
+      # Ship a self-contained MSVC CRT for both portable and installed builds.
+      RUSTFLAGS: -C target-feature=+crt-static
+      DOTNET_ROLL_FORWARD: Major
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.msvc }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: installers-${{ matrix.target }}
+      - name: Install WiX 4
+        run: |
+          dotnet tool install --global wix --version 4.0.6
+          if ($LASTEXITCODE -ne 0) { throw 'WiX installation failed' }
+      - name: Install Inno Setup 6 (pinned, SHA256 verified)
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'innosetup-6.4.3.exe'
+          Invoke-WebRequest 'https://github.com/jrsoftware/issrc/releases/download/is-6_4_3/innosetup-6.4.3.exe' -OutFile $installer
+          if ((Get-FileHash $installer -Algorithm SHA256).Hash -ne 'F3C42116542C4CC57263C5BA6C4FEABFC49FE771F2F98A79D2F7628B8762723B') {
+            throw 'Inno Setup checksum mismatch'
+          }
+          $innoDir = Join-Path $env:RUNNER_TEMP 'inno6'
+          $process = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=`"$innoDir`"") -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Inno Setup installation failed: $($process.ExitCode)" }
+          "INNO_SETUP_COMPILER=$innoDir\ISCC.exe" >> $env:GITHUB_ENV
+      - name: Build both executables
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin bandori-pet --bin bandori-ui
+      - name: Package all Windows formats
+        env:
+          PACKAGE_VERSION: ${{ needs.metadata.outputs.version }}
+        run: ./scripts/package-windows.ps1 -Target '${{ matrix.target }}' -Version $env:PACKAGE_VERSION -SkipBuild
+      - uses: actions/upload-artifact@v6
+        with:
+          name: installers-windows-${{ matrix.arch }}
+          path: dist/windows-${{ matrix.target }}-release/packages/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  linux:
+    name: Linux / ${{ matrix.arch }} / AppImage, DEB, RPM, tarball
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    # Keep native builds compatible with Ubuntu 22.04; Debian 13 supplies riscv64.
+    container: ${{ matrix.image }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            image: ubuntu:22.04
+            target: x86_64-unknown-linux-gnu
+            deb_arch: amd64
+            triplet: x86_64-linux-gnu
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            image: ubuntu:22.04
+            target: aarch64-unknown-linux-gnu
+            deb_arch: arm64
+            triplet: aarch64-linux-gnu
+          - arch: riscv64
+            runner: ubuntu-24.04
+            image: debian:trixie
+            target: riscv64gc-unknown-linux-gnu
+            deb_arch: riscv64
+            triplet: riscv64-linux-gnu
+    defaults:
+      run:
+        shell: bash
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install build and packaging dependencies
+        env:
+          TARGET_ARCH: ${{ matrix.deb_arch }}
+        run: |
+          if [[ "$TARGET_ARCH" == riscv64 ]]; then
+            dpkg --add-architecture riscv64
+          fi
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config python3 xz-utils \
+            zstd zip unzip file binutils squashfs-tools rpm \
+            "libgtk-3-dev:$TARGET_ARCH" "libayatana-appindicator3-dev:$TARGET_ARCH" \
+            "libxdo-dev:$TARGET_ARCH" "libx11-dev:$TARGET_ARCH" \
+            "libxrandr-dev:$TARGET_ARCH" "libxi-dev:$TARGET_ARCH" \
+            "libxcursor-dev:$TARGET_ARCH" "libxinerama-dev:$TARGET_ARCH" \
+            "libxkbcommon-dev:$TARGET_ARCH" "libxkbcommon-x11-dev:$TARGET_ARCH" \
+            "libvulkan-dev:$TARGET_ARCH" "libegl-dev:$TARGET_ARCH" \
+            "libfontconfig1-dev:$TARGET_ARCH"
+          if [[ "$TARGET_ARCH" == riscv64 ]]; then
+            apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu g++-riscv64-linux-gnu
+          fi
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: installers-${{ matrix.image }}-${{ matrix.target }}
+      - name: Configure RISC-V cross compilation
+        if: matrix.arch == 'riscv64'
+        run: |
+          {
+            echo 'CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER=riscv64-linux-gnu-gcc'
+            echo 'CC_riscv64gc_unknown_linux_gnu=riscv64-linux-gnu-gcc'
+            echo 'CXX_riscv64gc_unknown_linux_gnu=riscv64-linux-gnu-g++'
+            echo 'AR_riscv64gc_unknown_linux_gnu=riscv64-linux-gnu-ar'
+            echo 'PKG_CONFIG_ALLOW_CROSS=1'
+            echo 'PKG_CONFIG_LIBDIR_riscv64gc_unknown_linux_gnu=/usr/lib/riscv64-linux-gnu/pkgconfig:/usr/share/pkgconfig'
+            echo 'PKG_CONFIG_SYSROOT_DIR_riscv64gc_unknown_linux_gnu=/'
+          } >> "$GITHUB_ENV"
+      - name: Build both executables
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin bandori-pet --bin bandori-ui
+      - name: Package all Linux formats
+        env:
+          PACKAGE_VERSION: ${{ needs.metadata.outputs.version }}
+        run: bash scripts/package-linux-release.sh --target=${{ matrix.target }} --version="$PACKAGE_VERSION"
+      - name: Verify package metadata and payload architecture
+        env:
+          TARGET: ${{ matrix.target }}
+          DEB_ARCH: ${{ matrix.deb_arch }}
+          TRIPLET: ${{ matrix.triplet }}
+        run: |
+          packages="dist/linux-$TARGET-release/packages"
+          test "$(dpkg-deb -f "$packages/"*.deb Architecture)" = "$DEB_ARCH"
+          rpm -qip "$packages/"*.rpm
+          tar -tzf "$packages/"*.tar.gz
+          "$TRIPLET-readelf" -h "target/$TARGET/release/bandori-pet"
+          "$TRIPLET-readelf" -h "target/$TARGET/release/bandori-ui"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: installers-linux-${{ matrix.arch }}
+          path: dist/linux-${{ matrix.target }}-release/packages/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  macos:
+    name: macOS / ${{ matrix.arch }} / app ZIP, DMG
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            runner: macos-15
+            target: aarch64-apple-darwin
+          - arch: x86_64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '12.0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: installers-${{ matrix.target }}
+      - name: Build and sign app bundle
+        run: bash scripts/package-macos.sh --target=${{ matrix.target }}
+      - name: Prepare ZIP and DMG
+        env:
+          PACKAGE_VERSION: ${{ needs.metadata.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          ARCH: ${{ matrix.arch }}
+        shell: bash
+        run: |
+          output="dist/macos-$TARGET-release"
+          name="BANDORI-PET-LITE-$PACKAGE_VERSION-macos-$ARCH"
+          mkdir -p "$output/packages" "$RUNNER_TEMP/dmg-$ARCH"
+          cp "$output/BANDORI-PET-LITE.zip" "$output/packages/$name.zip"
+          ditto "$output/BANDORI-PET-LITE.app" "$RUNNER_TEMP/dmg-$ARCH/BANDORI-PET-LITE.app"
+          ln -s /Applications "$RUNNER_TEMP/dmg-$ARCH/Applications"
+          hdiutil create -volname BANDORI-PET-LITE -srcfolder "$RUNNER_TEMP/dmg-$ARCH" \
+            -ov -format UDZO "$output/packages/$name.dmg"
+          hdiutil verify "$output/packages/$name.dmg"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: installers-macos-${{ matrix.arch }}
+          path: dist/macos-${{ matrix.target }}-release/packages/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  collect:
+    name: Collect all installers and publish release assets
+    needs: [metadata, windows, linux, macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: installers-*
+          merge-multiple: true
+          path: packages
+      - name: Check completeness and generate SHA256 checksums
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          packages = Path('packages')
+          expected = {f'{system}-{arch}{suffix}'
+              for system, arches, suffixes in [
+                  ('windows', ('x86_64', 'aarch64'), ('.msi', '-setup.exe', '.zip')),
+                  ('linux', ('x86_64', 'aarch64', 'riscv64'), ('.AppImage', '.deb', '.rpm', '.tar.gz')),
+                  ('macos', ('x86_64', 'aarch64'), ('.zip', '.dmg'))]
+              for arch in arches for suffix in suffixes}
+          files = sorted(p for p in packages.iterdir() if p.is_file())
+          if len(files) != len(expected) or any(not any(p.name.endswith(s) for p in files) for s in expected):
+              raise SystemExit('Incomplete installer matrix (expected 22 packages)')
+          with (packages / 'SHA256SUMS.txt').open('w') as output:
+              for path in files:
+                  with path.open('rb') as binary:
+                      print(f'{hashlib.file_digest(binary, "sha256").hexdigest()}  {path.name}', file=output)
+          PY
+      - uses: actions/upload-artifact@v6
+        with:
+          name: BANDORI-PET-LITE-${{ needs.metadata.outputs.version }}-all-installers
+          path: packages/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Attach packages to the published release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" packages/* --clobber

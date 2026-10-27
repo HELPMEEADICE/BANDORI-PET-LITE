@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <!-- Stable component identities, distinct for each installation architecture. -->
+  <?if $(var.AppArch) = aarch64 ?>
+    <?define ComponentPrefix = "F37B05CF" ?>
+  <?else?>
+    <?define ComponentPrefix = "8C2C517A" ?>
+  <?endif?>
+  <Package Name="BANDORI-PET-LITE ($(var.AppArch))"
+           Manufacturer="BANDORI-PET-LITE contributors"
+           Version="$(var.MsiVersion)" Language="1033" Scope="perUser"
+           UpgradeCode="$(var.UpgradeCode)">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of BANDORI-PET-LITE is already installed."
+                  AllowSameVersionUpgrades="yes" />
+    <MediaTemplate EmbedCab="yes" />
+    <Icon Id="AppIcon" SourceFile="$(var.SourceDir)\assets\icons\bandori.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="BANDORI-PET-LITE-$(var.AppArch)">
+          <Component Id="PetExecutable" Guid="$(var.ComponentPrefix)-F654-4C43-B835-1FE7DF609001">
+            <File Id="PetExe" Source="$(var.PayloadDir)\bandori-pet.exe" />
+            <RegistryValue Root="HKCU" Key="Software\BANDORI-PET-LITE\$(var.AppArch)\Components" Name="Pet" Type="integer" Value="1" KeyPath="yes" />
+            <RemoveFolder Id="RemoveInstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
+            <RemoveFolder Id="RemoveProgramsFolder" Directory="ProgramsFolder" On="uninstall" />
+          </Component>
+          <Component Id="UiExecutable" Guid="$(var.ComponentPrefix)-F654-4C43-B835-1FE7DF609002">
+            <File Source="$(var.PayloadDir)\bandori-ui.exe" />
+            <RegistryValue Root="HKCU" Key="Software\BANDORI-PET-LITE\$(var.AppArch)\Components" Name="Ui" Type="integer" Value="1" KeyPath="yes" />
+          </Component>
+          <Component Id="LicenseFile" Guid="$(var.ComponentPrefix)-F654-4C43-B835-1FE7DF609003">
+            <File Source="$(var.PayloadDir)\LICENSE" />
+            <RegistryValue Root="HKCU" Key="Software\BANDORI-PET-LITE\$(var.AppArch)\Components" Name="License" Type="integer" Value="1" KeyPath="yes" />
+          </Component>
+          <Component Id="NoticeFile" Guid="$(var.ComponentPrefix)-F654-4C43-B835-1FE7DF609004">
+            <File Source="$(var.PayloadDir)\NOTICE.md" />
+            <RegistryValue Root="HKCU" Key="Software\BANDORI-PET-LITE\$(var.AppArch)\Components" Name="Notice" Type="integer" Value="1" KeyPath="yes" />
+          </Component>
+          <Directory Id="AssetsFolder" Name="assets">
+            <Component Id="BandCatalog" Guid="$(var.ComponentPrefix)-F654-4C43-B835-1FE7DF609005">
+              <File Source="$(var.PayloadDir)\assets\band.json" />
+              <RegistryValue Root="HKCU" Key="Software\BANDORI-PET-LITE\$(var.AppArch)\Components" Name="BandCatalog" Type="integer" Value="1" KeyPath="yes" />
+              <RemoveFolder Id="RemoveAssetsFolder" Directory="AssetsFolder" On="uninstall" />
+            </Component>
+            <Component Id="OutfitCatalog" Guid="$(var.ComponentPrefix)-F654-4C43-B835-1FE7DF609006">
+              <File Source="$(var.PayloadDir)\assets\outfit.json" />
+              <RegistryValue Root="HKCU" Key="Software\BANDORI-PET-LITE\$(var.AppArch)\Components" Name="OutfitCatalog" Type="integer" Value="1" KeyPath="yes" />
+            </Component>
+            <Directory Id="IconsFolder" Name="icons">
+              <Component Id="PngIcon" Guid="$(var.ComponentPrefix)-F654-4C43-B835-1FE7DF609007">
+                <File Source="$(var.PayloadDir)\assets\icons\bandori.png" />
+                <RegistryValue Root="HKCU" Key="Software\BANDORI-PET-LITE\$(var.AppArch)\Components" Name="PngIcon" Type="integer" Value="1" KeyPath="yes" />
+                <RemoveFolder Id="RemoveIconsFolder" Directory="IconsFolder" On="uninstall" />
+              </Component>
+              <Component Id="IcoIcon" Guid="$(var.ComponentPrefix)-F654-4C43-B835-1FE7DF609008">
+                <File Source="$(var.PayloadDir)\assets\icons\bandori.ico" />
+                <RegistryValue Root="HKCU" Key="Software\BANDORI-PET-LITE\$(var.AppArch)\Components" Name="IcoIcon" Type="integer" Value="1" KeyPath="yes" />
+              </Component>
+            </Directory>
+          </Directory>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="*">
+        <Shortcut Id="StartMenuEntry" Name="BANDORI-PET-LITE ($(var.AppArch))"
+                  Target="[INSTALLFOLDER]bandori-pet.exe" WorkingDirectory="INSTALLFOLDER" Icon="AppIcon" />
+        <RegistryValue Root="HKCU" Key="Software\BANDORI-PET-LITE\$(var.AppArch)"
+                       Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+    <Feature Id="Application" Title="BANDORI-PET-LITE" Level="1">
+      <ComponentRef Id="PetExecutable" />
+      <ComponentRef Id="UiExecutable" />
+      <ComponentRef Id="LicenseFile" />
+      <ComponentRef Id="NoticeFile" />
+      <ComponentRef Id="BandCatalog" />
+      <ComponentRef Id="OutfitCatalog" />
+      <ComponentRef Id="PngIcon" />
+      <ComponentRef Id="IcoIcon" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+  </Package>
+</Wix>

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=BANDORI-PET-LITE
+Comment=BanG Dream! Live2D desktop pet
+Exec=bandori-pet
+Icon=bandori-pet
+Terminal=false
+Categories=Game;Amusement;
+StartupNotify=false

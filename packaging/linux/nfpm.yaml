@@ -1,0 +1,74 @@
+name: bandori-pet-lite
+arch: ${PACKAGE_ARCH}
+platform: linux
+version: ${PACKAGE_VERSION}
+release: '1'
+section: games
+priority: optional
+maintainer: BANDORI-PET-LITE contributors <noreply@github.com>
+description: BanG Dream! Live2D desktop pet for X11 desktops.
+homepage: https://github.com/HELPMEEADICE/BANDORI-PET-LITE
+license: GPL-3.0-only
+contents:
+  - src: ${PACKAGE_PAYLOAD}/bandori-pet
+    dst: /usr/lib/bandori-pet-lite/bandori-pet
+    expand: true
+    file_info:
+      mode: 0755
+  - src: ${PACKAGE_PAYLOAD}/bandori-ui
+    dst: /usr/lib/bandori-pet-lite/bandori-ui
+    expand: true
+    file_info:
+      mode: 0755
+  - src: ${PACKAGE_PAYLOAD}/assets/
+    dst: /usr/lib/bandori-pet-lite/assets
+    type: tree
+    expand: true
+  - src: /usr/lib/bandori-pet-lite/bandori-pet
+    dst: /usr/bin/bandori-pet
+    type: symlink
+  - src: packaging/linux/bandori-pet.desktop
+    dst: /usr/share/applications/bandori-pet.desktop
+  - src: assets/icons/bandori.png
+    dst: /usr/share/icons/hicolor/256x256/apps/bandori-pet.png
+  - src: LICENSE
+    dst: /usr/share/licenses/bandori-pet-lite/LICENSE
+  - src: NOTICE.md
+    dst: /usr/share/doc/bandori-pet-lite/NOTICE.md
+  - src: docs/LINUX.md
+    dst: /usr/share/doc/bandori-pet-lite/LINUX.md
+overrides:
+  deb:
+    depends:
+      - libc6 (>= ${PACKAGE_GLIBC_MIN})
+      - libgcc-s1
+      - libstdc++6
+      - ${PACKAGE_GTK_DEB} (>= 3.24)
+      - libayatana-appindicator3-1
+      - libxdo3
+      - libx11-6
+      - libxcursor1
+      - libxi6
+      - libxrandr2
+      - libxkbcommon0
+      - libxkbcommon-x11-0
+      - libfontconfig1
+      - libegl1
+      - libvulkan1
+  rpm:
+    depends:
+      - glibc >= ${PACKAGE_GLIBC_MIN}
+      - libgcc
+      - libstdc++
+      - gtk3 >= 3.24
+      - libayatana-appindicator-gtk3
+      - libxdo
+      - libX11
+      - libXcursor
+      - libXi
+      - libXrandr
+      - libxkbcommon
+      - libxkbcommon-x11
+      - fontconfig
+      - libglvnd-egl
+      - vulkan-loader

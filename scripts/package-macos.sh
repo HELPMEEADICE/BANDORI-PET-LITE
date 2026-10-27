@@ -38,6 +38,8 @@ for binary in bandori-pet bandori-ui; do
     [[ -x "$BIN_DIR/$binary" ]] || { echo "Missing executable: $BIN_DIR/$binary" >&2; exit 1; }
 done
 VERSION="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "bandori-pet-bin"))')"
+# Apple bundle versions are numeric, including for SemVer prerelease packages.
+BUNDLE_VERSION="${VERSION%%-*}"
 ARCH="${TARGET:-$(uname -m)}"
 OUTPUT="$ROOT/dist/macos-$ARCH-$PROFILE"
 mkdir -p "$OUTPUT"
@@ -71,8 +73,9 @@ cat > "$CONTENTS/Info.plist" <<EOF
 <key>CFBundleExecutable</key><string>bandori-pet</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleIconFile</key><string>bandori.icns</string>
-<key>CFBundleShortVersionString</key><string>$VERSION</string>
-<key>CFBundleVersion</key><string>$VERSION</string>
+<key>CFBundleShortVersionString</key><string>$BUNDLE_VERSION</string>
+<key>CFBundleVersion</key><string>$BUNDLE_VERSION</string>
+<key>CFBundleGetInfoString</key><string>$VERSION</string>
 <key>LSMinimumSystemVersion</key><string>$MACOSX_DEPLOYMENT_TARGET</string>
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>

@@ -91,6 +91,8 @@ bash scripts/package-linux.sh --skip-build
 
 ### 持续集成
 
+发布安装包使用独立的 [Build installers 工作流](.github/workflows/release.yml)，支持发布 Release 自动触发和 Actions 手动触发。Windows（x86_64/aarch64）生成 MSI、Inno Setup 6 EXE 和 ZIP；Linux（x86_64/aarch64/riscv64）生成 AppImage、DEB、RPM 和 tar.gz；macOS（aarch64/x86_64）生成应用 ZIP 和 DMG。手动构建后可在本次 Actions 运行的 Artifacts 中下载全部安装包与 SHA256 校验文件，操作和运行要求见 [自动构建与发布说明](docs/RELEASING.md)。
+
 每次 push、Pull Request 和手动触发都会运行 [GitHub Actions CI](.github/workflows/ci.yml)：
 
 - Rust：`cargo fmt` 格式检查，以及 Windows 上整个 workspace 的 `cargo check`、Clippy（告警视为错误）、两个程序的构建、单元与集成测试、文档测试和文档生成检查。
