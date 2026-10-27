@@ -102,12 +102,26 @@ jobs:
         env:
           PACKAGE_VERSION: ${{ needs.metadata.outputs.version }}
         run: ./scripts/package-windows.ps1 -Target '${{ matrix.target }}' -Version $env:PACKAGE_VERSION -SkipBuild
-      - uses: actions/upload-artifact@v6
+      - name: Upload ZIP package
+        uses: actions/upload-artifact@v7
         with:
-          name: installers-windows-${{ matrix.arch }}
-          path: dist/windows-${{ matrix.target }}-release/packages/*
+          path: dist/windows-${{ matrix.target }}-release/packages/BANDORI-PET-LITE-${{ needs.metadata.outputs.version }}-windows-${{ matrix.arch }}.zip
+          archive: false
           if-no-files-found: error
-          compression-level: 0
+          retention-days: 30
+      - name: Upload MSI package
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/windows-${{ matrix.target }}-release/packages/BANDORI-PET-LITE-${{ needs.metadata.outputs.version }}-windows-${{ matrix.arch }}.msi
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload EXE package
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/windows-${{ matrix.target }}-release/packages/BANDORI-PET-LITE-${{ needs.metadata.outputs.version }}-windows-${{ matrix.arch }}-setup.exe
+          archive: false
+          if-no-files-found: error
           retention-days: 30
 
   linux:
@@ -206,12 +220,33 @@ jobs:
           tar -tzf "$packages/"*.tar.gz
           "$TRIPLET-readelf" -h "target/$TARGET/release/bandori-pet"
           "$TRIPLET-readelf" -h "target/$TARGET/release/bandori-ui"
-      - uses: actions/upload-artifact@v6
+      - name: Upload AppImage package
+        uses: actions/upload-artifact@v7
         with:
-          name: installers-linux-${{ matrix.arch }}
-          path: dist/linux-${{ matrix.target }}-release/packages/*
+          path: dist/linux-${{ matrix.target }}-release/packages/BANDORI-PET-LITE-${{ needs.metadata.outputs.version }}-linux-${{ matrix.arch }}.AppImage
+          archive: false
           if-no-files-found: error
-          compression-level: 0
+          retention-days: 30
+      - name: Upload DEB package
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/linux-${{ matrix.target }}-release/packages/BANDORI-PET-LITE-${{ needs.metadata.outputs.version }}-linux-${{ matrix.arch }}.deb
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload RPM package
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/linux-${{ matrix.target }}-release/packages/BANDORI-PET-LITE-${{ needs.metadata.outputs.version }}-linux-${{ matrix.arch }}.rpm
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload tarball package
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/linux-${{ matrix.target }}-release/packages/BANDORI-PET-LITE-${{ needs.metadata.outputs.version }}-linux-${{ matrix.arch }}.tar.gz
+          archive: false
+          if-no-files-found: error
           retention-days: 30
 
   macos:
@@ -260,12 +295,19 @@ jobs:
           hdiutil create -volname BANDORI-PET-LITE -srcfolder "$RUNNER_TEMP/dmg-$ARCH" \
             -ov -format UDZO "$output/packages/$name.dmg"
           hdiutil verify "$output/packages/$name.dmg"
-      - uses: actions/upload-artifact@v6
+      - name: Upload ZIP package
+        uses: actions/upload-artifact@v7
         with:
-          name: installers-macos-${{ matrix.arch }}
-          path: dist/macos-${{ matrix.target }}-release/packages/*
+          path: dist/macos-${{ matrix.target }}-release/packages/BANDORI-PET-LITE-${{ needs.metadata.outputs.version }}-macos-${{ matrix.arch }}.zip
+          archive: false
           if-no-files-found: error
-          compression-level: 0
+          retention-days: 30
+      - name: Upload DMG package
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/macos-${{ matrix.target }}-release/packages/BANDORI-PET-LITE-${{ needs.metadata.outputs.version }}-macos-${{ matrix.arch }}.dmg
+          archive: false
+          if-no-files-found: error
           retention-days: 30
 
   collect:
@@ -276,10 +318,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
-          pattern: installers-*
+          pattern: BANDORI-PET-LITE-*
           merge-multiple: true
+          skip-decompress: true
           path: packages
       - name: Check completeness and generate SHA256 checksums
         shell: bash
@@ -302,12 +345,12 @@ jobs:
                   with path.open('rb') as binary:
                       print(f'{hashlib.file_digest(binary, "sha256").hexdigest()}  {path.name}', file=output)
           PY
-      - uses: actions/upload-artifact@v6
+      - name: Upload SHA256 checksums
+        uses: actions/upload-artifact@v7
         with:
-          name: BANDORI-PET-LITE-${{ needs.metadata.outputs.version }}-all-installers
-          path: packages/*
+          path: packages/SHA256SUMS.txt
+          archive: false
           if-no-files-found: error
-          compression-level: 0
           retention-days: 30
       - name: Attach packages to the published release
         if: github.event_name == 'release'
