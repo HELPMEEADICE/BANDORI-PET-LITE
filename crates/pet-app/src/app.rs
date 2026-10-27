@@ -825,24 +825,23 @@ impl PetApp {
         let Some(role) = self.roles.get(role_index) else {
             return;
         };
-        let (x, y, width, height) =
-            role.window_rect()
-                .unwrap_or((role.base_position.0, role.base_position.1, 0, 0));
-        let center = (x + width as i32 / 2, y + height as i32 / 2);
+        let Some((x, y)) = role.cursor_global() else {
+            return;
+        };
         // Cross-process coordinates on macOS use logical desktop points so the
         // popup can select its own backing scale on mixed Retina displays.
         #[cfg(target_os = "macos")]
-        let center = (
-            (center.0 as f64 / role.window.scale_factor()).round() as i32,
-            (center.1 as f64 / role.window.scale_factor()).round() as i32,
+        let (x, y) = (
+            x as f64 / role.window.scale_factor(),
+            y as f64 / role.window.scale_factor(),
         );
         self.config.character = role.character.clone();
         self.config.costume = role.costume.clone();
         self.config_dirty = true;
         self.send_snapshot();
         self.ipc.send(&Message::MenuShow {
-            x: center.0,
-            y: center.1,
+            x: x.round() as i32,
+            y: y.round() as i32,
             items: pet_ipc::MenuItem::lite_items(&self.config.language),
             locked: self.config.drag_locked,
         });

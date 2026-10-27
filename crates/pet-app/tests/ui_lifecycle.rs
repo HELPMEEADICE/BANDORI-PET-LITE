@@ -518,13 +518,22 @@ fn radial_popup_is_frameless_passes_gaps_through_animates_and_reopens() {
 }
 
 #[test]
-#[ignore = "requires a local installation, model and GPU; launches both real executables"]
+#[ignore = "requires a local installation, model and GPU; launches both executables and moves the cursor"]
 fn right_click_model_paints_menu_in_the_real_two_process_runtime() {
     use std::path::PathBuf;
     use windows::Win32::UI::HiDpi::{
         SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{WM_RBUTTONDOWN, WM_RBUTTONUP};
+    use windows::Win32::UI::WindowsAndMessaging::{WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP};
+
+    struct CursorRestore(Option<(f32, f32)>);
+    impl Drop for CursorRestore {
+        fn drop(&mut self) {
+            if let Some((x, y)) = self.0 {
+                pet_window::win32::set_cursor_position(x, y);
+            }
+        }
+    }
 
     struct PetChild(Child, PathBuf);
     impl Drop for PetChild {
@@ -562,6 +571,7 @@ fn right_click_model_paints_menu_in_the_real_two_process_runtime() {
     unsafe {
         SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
+    let _cursor = CursorRestore(pet_window::cursor_position());
     let source = PathBuf::from(
         std::env::var_os("BANDORI_PET_TEST_ROOT").expect("set BANDORI_PET_TEST_ROOT"),
     );
@@ -623,22 +633,19 @@ fn right_click_model_paints_menu_in_the_real_two_process_runtime() {
                     .is_ok_and(|log| log.contains("settings process connected"))
             })
     });
-    for _ in 0..3 {
+    for (column, row) in [(1, 1), (2, 2), (1, 2)] {
+        let (x, y, width, height) = pet_window::win32::window_rect(model).unwrap();
+        let local = (width as i32 * column / 3, height as i32 * row / 3);
+        let click = (x + local.0, y + local.1);
+        assert!(pet_window::win32::set_cursor_position(
+            click.0 as f32,
+            click.1 as f32,
+        ));
+        let position = LPARAM(((local.1 << 16) | (local.0 & 0xffff)) as isize);
         unsafe {
-            PostMessageW(
-                Some(model),
-                WM_RBUTTONDOWN,
-                WPARAM(2),
-                LPARAM((100 << 16) | 100),
-            )
-            .unwrap();
-            PostMessageW(
-                Some(model),
-                WM_RBUTTONUP,
-                WPARAM(0),
-                LPARAM((100 << 16) | 100),
-            )
-            .unwrap();
+            PostMessageW(Some(model), WM_MOUSEMOVE, WPARAM(0), position).unwrap();
+            PostMessageW(Some(model), WM_RBUTTONDOWN, WPARAM(2), position).unwrap();
+            PostMessageW(Some(model), WM_RBUTTONUP, WPARAM(0), position).unwrap();
         }
         let find_menu = || {
             visible_windows(0)
@@ -648,6 +655,21 @@ fn right_click_model_paints_menu_in_the_real_two_process_runtime() {
         };
         wait_until("right-click opens the real menu", || find_menu().is_some());
         std::thread::sleep(Duration::from_millis(350));
-        assert_buttons_are_painted(find_menu().unwrap());
+        let menu = find_menu().unwrap();
+        let (left, top, width, height) = pet_window::win32::window_rect(menu).unwrap();
+        let monitors = pet_window::placement::monitors_for_scale(width as f64 / 360.);
+        let monitor = pet_window::placement::monitor_at(&monitors, click).unwrap();
+        let [work_x, work_y, work_width, work_height] = monitor.work;
+        let expected = (
+            (click.0 - width as i32 / 2).clamp(work_x, work_x + (work_width - width as i32).max(0)),
+            (click.1 - height as i32 / 2)
+                .clamp(work_y, work_y + (work_height - height as i32).max(0)),
+        );
+        assert_eq!(
+            (left, top),
+            expected,
+            "menu must follow the right-click at {click:?}, bounded by the work area"
+        );
+        assert_buttons_are_painted(menu);
     }
 }

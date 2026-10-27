@@ -513,6 +513,15 @@ impl Role {
         self.cursor
     }
 
+    /// Current cursor position in screen physical pixels.
+    pub fn cursor_global(&self) -> Option<(f32, f32)> {
+        global_cursor(&self.window).or_else(|| {
+            let cursor = self.cursor_local()?;
+            let origin = self.window.inner_position().ok()?;
+            Some((origin.x as f32 + cursor.0, origin.y as f32 + cursor.1))
+        })
+    }
+
     /// Remembers that the user interacted (resets idle timers).
     pub fn note_interaction(&mut self, now: f64) {
         self.behavior.note_interaction(now);
