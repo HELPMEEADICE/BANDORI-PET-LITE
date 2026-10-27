@@ -1352,12 +1352,15 @@ export component RadialMenu inherits Window {
             accessible-role: button;
             accessible-label: root.locked ? "解除拖拽锁定" : "锁定拖拽";
             accessible-action-default => { root.toggle-lock(); }
-            Text {
-                text: root.locked ? "🔒" : "🔓";
-                font-size: 20px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-                color: #ffffff;
+            // Drawn as an icon rather than a 🔒/🔓 glyph: emoji fonts only ship
+            // outlines on Windows, so the software renderer paints nothing on Linux.
+            Image {
+                width: 20px;
+                height: 20px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                source: root.locked ? @image-url("icons/lock.svg") : @image-url("icons/unlock.svg");
+                image-fit: contain;
             }
 
             hub-touch := TouchArea {
