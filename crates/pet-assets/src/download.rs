@@ -18,16 +18,63 @@ pub const MODEL_PACKAGE_BASE_URL: &str =
 
 #[derive(Debug, thiserror::Error)]
 pub enum DownloadError {
-    #[error("下载已取消")]
+    #[error("download cancelled")]
     Cancelled,
-    #[error("无效的角色标识：{0}")]
+    #[error("invalid character key: {0}")]
     InvalidKey(String),
-    #[error("网络请求失败：{0}")]
+    #[error("network request failed: {0}")]
     Http(#[from] reqwest::Error),
-    #[error("文件读写失败：{0}")]
+    #[error("file access failed: {0}")]
     Io(#[from] io::Error),
-    #[error("模型包校验失败：{0}")]
-    InvalidArchive(String),
+    #[error("package verification failed: {0}")]
+    InvalidArchive(ArchiveIssue),
+    /// The HTTP client or its async runtime could not be created.
+    #[error("downloader setup failed: {0}")]
+    Setup(String),
+}
+
+/// Why a downloaded archive was rejected. The UI localizes the reason, so the
+/// worker never has to guess the active language.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArchiveIssue {
+    /// The transfer was empty or shorter than `Content-Length`.
+    EmptyTransfer,
+    /// A member path is absolute (a drive letter, UNC or `/`).
+    AbsolutePath,
+    /// A member is a symbolic or hard link.
+    Link,
+    /// The archive carries no `model.json` / `*.model3.json`.
+    MissingModelFile,
+    /// `normalize_member` rejected the member path.
+    UnsafeMember(String),
+}
+
+impl ArchiveIssue {
+    /// Localized one-line reason.
+    pub fn text(&self, lang: pet_i18n::Lang) -> &'static str {
+        use pet_i18n::Key;
+        match self {
+            ArchiveIssue::EmptyTransfer => lang.text(Key::ArchiveEmptyTransfer),
+            ArchiveIssue::AbsolutePath => lang.text(Key::ArchiveAbsolutePath),
+            ArchiveIssue::Link => lang.text(Key::ArchiveLink),
+            ArchiveIssue::MissingModelFile => lang.text(Key::ArchiveNoModelFile),
+            ArchiveIssue::UnsafeMember(_) => lang.text(Key::ArchiveUnsafePath),
+        }
+    }
+}
+
+impl std::fmt::Display for ArchiveIssue {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ArchiveIssue::EmptyTransfer => formatter.write_str("empty or truncated response"),
+            ArchiveIssue::AbsolutePath => formatter.write_str("archive contains an absolute path"),
+            ArchiveIssue::Link => formatter.write_str("archive contains a link"),
+            ArchiveIssue::MissingModelFile => {
+                formatter.write_str("no model.json or *.model3.json found")
+            }
+            ArchiveIssue::UnsafeMember(member) => write!(formatter, "unsafe member path: {member}"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -115,7 +162,7 @@ impl PackageDownloader {
                 }
             }
             if downloaded == 0 || total.is_some_and(|size| size != downloaded) {
-                return Err(DownloadError::InvalidArchive("响应为空或下载不完整".into()));
+                return Err(DownloadError::InvalidArchive(ArchiveIssue::EmptyTransfer));
             }
             progress(DownloadProgress {
                 downloaded,
@@ -153,13 +200,14 @@ fn validate_archive(path: &Path, cancelled: &AtomicBool) -> Result<(), DownloadE
         let mut entry = entry?;
         let member = entry.path()?.to_string_lossy().replace('\\', "/");
         if member.starts_with('/') || member.contains(':') {
-            return Err(DownloadError::InvalidArchive("模型包包含绝对路径".into()));
+            return Err(DownloadError::InvalidArchive(ArchiveIssue::AbsolutePath));
         }
-        normalize_member(&member)
-            .map_err(|error| DownloadError::InvalidArchive(error.to_string()))?;
+        normalize_member(&member).map_err(|error| {
+            DownloadError::InvalidArchive(ArchiveIssue::UnsafeMember(error.to_string()))
+        })?;
         let kind = entry.header().entry_type();
         if kind.is_symlink() || kind.is_hard_link() {
-            return Err(DownloadError::InvalidArchive("模型包包含链接".into()));
+            return Err(DownloadError::InvalidArchive(ArchiveIssue::Link));
         }
         if kind.is_file() {
             if let Some((costume, file)) = member.split_once('/') {
@@ -181,7 +229,7 @@ fn validate_archive(path: &Path, cancelled: &AtomicBool) -> Result<(), DownloadE
     }
     if !found {
         return Err(DownloadError::InvalidArchive(
-            "未找到可用的 model.json 或 .model3.json".into(),
+            ArchiveIssue::MissingModelFile,
         ));
     }
     Ok(())

@@ -21,6 +21,7 @@ export global Motion {
     out property <duration> entrance: 220ms;
 }
 
+
 export component AnimatedContent inherits Rectangle {
     in property <int> revision;
     private property <bool> entered: false;
@@ -137,6 +138,8 @@ export component ActionButton inherits Rectangle {
 export component ToggleRow inherits Rectangle {
     in property <string> text;
     in property <string> hint;
+    in property <string> on-label: "On";
+    in property <string> off-label: "Off";
     in property <bool> checked;
     callback toggled(bool);
     height: hint == "" ? 34px : 53px;
@@ -198,8 +201,8 @@ export component ToggleRow inherits Rectangle {
         }
 
         Body {
-            text: root.checked ? "On" : "Off";
-            width: 24px;
+            text: root.checked ? root.on-label : root.off-label;
+            width: 32px;
             font-size: 13px;
             color: root.checked ? Colors.accent : Colors.muted;
             animate color {

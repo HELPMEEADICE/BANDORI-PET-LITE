@@ -7,6 +7,7 @@ import {
     Palette,
 } from "std-widgets.slint";
 import { ModelPicker, PickerRow, CostumeItem } from "picker.slint";
+import { Texts } from "texts.slint";
 import {
     Colors,
     Motion,
@@ -36,20 +37,20 @@ export struct DownloadRow {
 }
 
 export component SettingsWindow inherits Window {
-    title: "Bandori 桌宠 LITE - 设置";
+    title: root.t.settings-title;
     icon: @image-url("../../../assets/icons/bandori.png");
     preferred-width: 1180px;
     preferred-height: 680px;
     min-width: 1080px;
     min-height: 620px;
-    default-font-family: "Microsoft YaHei UI";
+    default-font-family: root.ui-font;
     default-font-size: 14px;
     background: Colors.canvas;
 
     in-out property <int> page: 0;
     in property <[DownloadRow]> download-rows;
     in property <string> download-summary;
-    in property <string> download-notice: "下载完整角色模型包；更新会重新下载并替换本地模型。";
+    in property <string> download-notice;
     in property <bool> download-busy;
     in property <bool> download-scanning;
     in property <bool> no-installed-models;
@@ -80,6 +81,8 @@ export component SettingsWindow inherits Window {
     in-out property <string> import-error;
     in-out property <bool> importing;
     in-out property <int> language-index;
+    in property <Texts> t;
+    in property <string> ui-font: "Microsoft YaHei UI";
     in-out property <bool> options-dirty;
     callback start-picker();
     callback picker-back();
@@ -93,26 +96,24 @@ export component SettingsWindow inherits Window {
     callback apply-options();
     callback remove-model(int);
     callback select-model(int);
+    callback language-selected(int);
     in property <int> active-model-index: -1;
     in property <[string]> motion-options;
     in property <[string]> expression-options;
     in property <[RegionRow]> regions;
     in property <[AboutLine]> about-lines;
-    in property <[string]> quality-labels: ["省电", "均衡"];
-    in property <[string]> theme-labels: ["浅色", "深色", "跟随系统"];
-    in property <[string]> preset-labels: [
-        "自动选择",
-        "元气开朗",
-        "傲娇",
-        "害羞内向",
-        "冷静理智",
-        "惊讶意外",
-        "随机"
-    ];
+    in property <[string]> quality-labels;
+    in property <[string]> theme-labels;
+    in property <[string]> preset-labels;
+    in property <[string]> filter-labels;
+    in property <string> picker-title;
+    in property <string> picker-subtitle;
+    in property <string> roles-heading;
+    in property <string> first-run-banner;
     in property <[AboutLine]> active-models;
     in property <image> portrait;
     in property <bool> has-portrait;
-    in property <string> active-character-label: "尚未选择角色";
+    in property <string> active-character-label: root.t.never-selected;
     in property <string> active-costume-label;
     in property <string> active-band;
     in property <bool> has-model;
@@ -123,7 +124,7 @@ export component SettingsWindow inherits Window {
     in-out property <string> selected-costume;
     in-out property <string> selected-character-label;
     in-out property <string> model-info;
-    in-out property <string> status: "正在连接桌宠进程…";
+    in-out property <string> status: root.t.status-connecting;
     in-out property <bool> first-run;
     in-out property <int> fps: 120;
     in-out property <float> window-opacity: 100;
@@ -151,7 +152,7 @@ export component SettingsWindow inherits Window {
     callback patch-bool(string, bool);
     callback patch-string(string, string);
     callback apply-preset(string);
-    callback edit-region(int, string, string);
+    callback edit-region(int, string, int);
     callback reset-positions();
     callback open-folder();
 
@@ -189,13 +190,13 @@ export component SettingsWindow inherits Window {
                         }
 
                         Heading {
-                            text: "导航";
+                            text: root.t.nav-heading;
                             horizontal-stretch: 1;
                         }
                     }
 
                     NavButton {
-                        text: "角色列表";
+                        text: root.t.nav-characters;
                         icon: @image-url("icons/characters.svg");
                         tint: #ff568e;
                         active: root.page == 0;
@@ -203,7 +204,7 @@ export component SettingsWindow inherits Window {
                     }
 
                     NavButton {
-                        text: "角色行为";
+                        text: root.t.nav-behavior;
                         icon: @image-url("icons/behavior.svg");
                         tint: #ff902c;
                         active: root.page == 2;
@@ -211,7 +212,7 @@ export component SettingsWindow inherits Window {
                     }
 
                     NavButton {
-                        text: "显示设置";
+                        text: root.t.nav-display;
                         icon: @image-url("icons/display.svg");
                         tint: #00d976;
                         active: root.page == 1;
@@ -219,7 +220,7 @@ export component SettingsWindow inherits Window {
                     }
 
                     NavButton {
-                        text: "模型下载与更新";
+                        text: root.t.nav-downloads;
                         icon: @image-url("icons/download.svg");
                         tint: #4a9eff;
                         active: root.page == 4;
@@ -232,7 +233,7 @@ export component SettingsWindow inherits Window {
                     }
 
                     NavButton {
-                        text: "关于";
+                        text: root.t.nav-about;
                         icon: @image-url("icons/about.svg");
                         tint: #a7b0bf;
                         active: root.page == 3;
@@ -259,7 +260,7 @@ export component SettingsWindow inherits Window {
                     Body {
                         x: 12px;
                         width: parent.width - 24px;
-                        text: root.no-installed-models ? "欢迎使用 Bandori 桌宠，尚未发现可用模型，请先下载喜欢的角色。" : "欢迎使用 Bandori 桌宠，选择角色与服装后即可显示在桌面。";
+                        text: root.first-run-banner;
                         font-size: 12px;
                     }
                 }
@@ -272,14 +273,14 @@ export component SettingsWindow inherits Window {
                         VerticalLayout {
                             spacing: 16px;
                             if !root.picking-model: Body {
-                                text: "Live2D 模型详情";
+                                text: root.t.model-details-title;
                                 font-size: 28px;
                                 font-weight: 700;
                                 horizontal-alignment: center;
                                 height: 36px;
                             }
                             if !root.picking-model: Body {
-                                text: "在右侧选择角色，或添加更多角色到桌面。";
+                                text: root.t.model-details-subtitle;
                                 font-size: 16px;
                                 font-weight: 700;
                                 horizontal-alignment: center;
@@ -327,7 +328,7 @@ export component SettingsWindow inherits Window {
                                                 }
 
                                                 Hint {
-                                                    text: root.has-model ? "此模型未提供角色立绘" : "选择一位角色，开始相伴";
+                                                    text: root.has-model ? root.t.no-portrait : root.t.pick-character-to-start;
                                                     horizontal-alignment: center;
                                                 }
                                             }
@@ -342,7 +343,7 @@ export component SettingsWindow inherits Window {
                                         }
 
                                         Body {
-                                            text: root.has-model ? "服装：" + root.active-costume-label : "还没有正在使用的模型";
+                                            text: root.has-model ? root.t.costume-prefix + root.active-costume-label : root.t.no-active-model;
                                             font-size: 17px;
                                             font-weight: 600;
                                             wrap: word-wrap;
@@ -350,7 +351,7 @@ export component SettingsWindow inherits Window {
                                         }
 
                                         Body {
-                                            text: root.active-band == "" ? "" : "乐队：" + root.active-band;
+                                            text: root.active-band == "" ? "" : root.t.band-prefix + root.active-band;
                                             font-size: 13px;
                                             horizontal-alignment: center;
                                         }
@@ -391,7 +392,7 @@ export component SettingsWindow inherits Window {
                                                     Body {
                                                         width: parent.width;
                                                         height: parent.height;
-                                                        text: "切换\n角色/服装";
+                                                        text: root.t.switch-model-button;
                                                         color: #ffffff;
                                                         font-size: 18px;
                                                         font-weight: 700;
@@ -404,29 +405,29 @@ export component SettingsWindow inherits Window {
                                                     }
 
                                                     accessible-role: button;
-                                                    accessible-label: "切换角色/服装";
+                                                    accessible-label: root.t.switch-model-accessible;
                                                     accessible-action-default => { root.adding-model = false; root.picking-model = true; root.start-picker(); }
                                                 }
                                             }
 
                                             Hint {
-                                                text: "选择新的角色或服装";
+                                                text: root.t.pick-new-hint;
                                                 horizontal-alignment: center;
                                             }
 
                                             Heading {
-                                                text: "点击动作反馈";
+                                                text: root.t.click-feedback-heading;
                                                 color: Colors.muted;
                                                 horizontal-alignment: center;
                                             }
 
                                             Hint {
-                                                text: "为七个点击区域分别设置动作与表情，自动匹配会按区域选择合适反馈。";
+                                                text: root.t.click-feedback-hint;
                                                 horizontal-alignment: center;
                                             }
 
                                             ActionButton {
-                                                text: "配置点击动作反馈 →";
+                                                text: root.t.configure-click-button;
                                                 clicked => { root.page = 2; }
                                             }
 
@@ -442,6 +443,10 @@ export component SettingsWindow inherits Window {
 
                             if root.picking-model: ModelPicker {
                                 stage: root.picker-stage;
+                                t: root.t;
+                                title: root.picker-title;
+                                subtitle: root.picker-subtitle;
+                                filter-labels: root.filter-labels;
                                 rows: root.picker-rows;
                                 costumes: root.picker-costumes;
                                 band-label: root.selected-band-label;
@@ -481,30 +486,38 @@ export component SettingsWindow inherits Window {
                                     spacing: 4px;
                                     alignment: start;
                                     Heading {
-                                        text: "设置";
+                                        text: root.t.settings-heading;
                                         height: 28px;
                                     }
 
                                     ToggleRow {
-                                        text: "游戏置顶兼容";
+                                        text: root.t.toggle-topmost;
+                                        on-label: root.t.toggle-on;
+                                        off-label: root.t.toggle-off;
                                         checked: root.topmost;
                                         toggled(value) => { root.topmost = value; root.options-dirty = true; }
                                     }
 
                                     if root.obs-supported: ToggleRow {
-                                        text: "OBS游戏采集兼容";
+                                        text: root.t.toggle-obs;
+                                        on-label: root.t.toggle-on;
+                                        off-label: root.t.toggle-off;
                                         checked: root.obs;
                                         toggled(value) => { root.obs = value; root.options-dirty = true; }
                                     }
 
                                     ToggleRow {
-                                        text: "隐藏Live2D形象";
+                                        text: root.t.toggle-hide-model;
+                                        on-label: root.t.toggle-on;
+                                        off-label: root.t.toggle-off;
                                         checked: root.hide-model;
                                         toggled(value) => { root.hide-model = value; root.options-dirty = true; }
                                     }
 
                                     ToggleRow {
-                                        text: "开机自启动";
+                                        text: root.t.toggle-autostart;
+                                        on-label: root.t.toggle-on;
+                                        off-label: root.t.toggle-off;
                                         checked: root.autostart;
                                         toggled(value) => { root.autostart = value; root.options-dirty = true; }
                                     }
@@ -513,14 +526,14 @@ export component SettingsWindow inherits Window {
                                         height: 32px;
                                         spacing: 12px;
                                         Body {
-                                            text: "主题";
+                                            text: root.t.theme-label;
                                         }
 
                                         ComboBox {
                                             min-width: 120px;
                                             model: root.theme-labels;
                                             current-index: root.theme;
-                                            selected(value) => { root.theme = value == "浅色" ? 0 : (value == "深色" ? 1 : 2); root.patch-string("dark_theme", root.theme == 0 ? "off" : (root.theme == 1 ? "on" : "system")); }
+                                            selected => { root.theme = self.current-index; root.patch-string("dark_theme", root.theme == 0 ? "off" : (root.theme == 1 ? "on" : "system")); }
                                         }
                                     }
 
@@ -528,19 +541,19 @@ export component SettingsWindow inherits Window {
                                         height: 32px;
                                         spacing: 12px;
                                         Body {
-                                            text: "语言";
+                                            text: root.t.language-label;
                                         }
 
                                         ComboBox {
-                                            min-width: 120px;
-                                            model: ["中文", "English"];
+                                            min-width: 130px;
+                                            model: ["简体中文", "繁體中文", "日本語", "한국어", "English"];
                                             current-index: root.language-index;
-                                            selected => { root.language-index = self.current-index; root.options-dirty = true; }
+                                            selected => { root.language-selected(self.current-index); }
                                         }
                                     }
 
                                     ActionButton {
-                                        text: "✓  应用";
+                                        text: root.t.apply-button;
                                         primary: true;
                                         clicked => { root.apply-options(); }
                                     }
@@ -551,7 +564,7 @@ export component SettingsWindow inherits Window {
                                     }
 
                                     Heading {
-                                        text: "桌面角色（" + root.active-models.length + "）";
+                                        text: root.roles-heading;
                                         height: 28px;
                                     }
 
@@ -566,7 +579,7 @@ export component SettingsWindow inherits Window {
                                             easing: ease-out;
                                         }
                                         accessible-role: button;
-                                        accessible-label: "选择角色：" + item.label;
+                                        accessible-label: root.t.role-select-accessible + item.label;
                                         accessible-action-default => { root.select-model(index); }
                                         VerticalLayout {
                                             padding: 9px;
@@ -596,7 +609,7 @@ export component SettingsWindow inherits Window {
                                             color: #ff5368;
                                             horizontal-alignment: center;
                                             accessible-role: button;
-                                            accessible-label: "移除角色：" + item.label;
+                                            accessible-label: root.t.role-remove-accessible + item.label;
                                             accessible-action-default => { root.remove-model(index); }
                                             TouchArea {
                                                 mouse-cursor: pointer;
@@ -605,10 +618,10 @@ export component SettingsWindow inherits Window {
                                         }
                                     }
                                     if root.active-models.length == 0: Hint {
-                                        text: "暂无模型，点击下方按钮选择角色。";
+                                        text: root.t.roles-empty;
                                     }
                                     ActionButton {
-                                        text: "+ 添加 Live2D 模型";
+                                        text: root.t.add-model-button;
                                         height: 38px;
                                         border-radius: 12px;
                                         background: transparent;
@@ -618,7 +631,7 @@ export component SettingsWindow inherits Window {
                                     }
 
                                     Hint {
-                                        text: "每位角色独立保存位置，重启后自动恢复。";
+                                        text: root.t.roles-hint;
                                         font-size: 11px;
                                         wrap: word-wrap;
                                     }
@@ -630,14 +643,14 @@ export component SettingsWindow inherits Window {
                     if root.page == 1: VerticalLayout {
                         spacing: 18px;
                         Body {
-                            text: "显示设置";
+                            text: root.t.nav-display;
                             font-size: 28px;
                             font-weight: 700;
                             height: 40px;
                         }
 
                         Hint {
-                            text: "调整桌宠的画面、大小与渲染表现。";
+                            text: root.t.display-hint;
                         }
 
                         ScrollView {
@@ -650,13 +663,13 @@ export component SettingsWindow inherits Window {
                                         padding: 22px;
                                         spacing: 18px;
                                         Heading {
-                                            text: "画面与性能";
+                                            text: root.t.display-section;
                                         }
 
                                         HorizontalLayout {
                                             spacing: 20px;
                                             Body {
-                                                text: "画质档位";
+                                                text: root.t.quality-label;
                                                 width: 110px;
                                             }
 
@@ -664,11 +677,11 @@ export component SettingsWindow inherits Window {
                                                 model: root.quality-labels;
                                                 current-index: root.quality;
                                                 width: 160px;
-                                                selected(value) => { root.patch-string("live2d_quality", value == "均衡" ? "balanced" : "performance"); }
+                                                selected => { root.patch-string("live2d_quality", self.current-index == 1 ? "balanced" : "performance"); }
                                             }
 
                                             Hint {
-                                                text: "省电：0.75× 分辨率    均衡：原生分辨率";
+                                                text: root.t.quality-hint;
                                                 horizontal-stretch: 1;
                                             }
                                         }
@@ -676,7 +689,7 @@ export component SettingsWindow inherits Window {
                                         HorizontalLayout {
                                             spacing: 20px;
                                             Body {
-                                                text: "刷新率";
+                                                text: root.t.fps-label;
                                                 width: 110px;
                                             }
 
@@ -698,7 +711,7 @@ export component SettingsWindow inherits Window {
                                         HorizontalLayout {
                                             spacing: 20px;
                                             Body {
-                                                text: "模型缩放";
+                                                text: root.t.scale-label;
                                                 width: 110px;
                                             }
 
@@ -720,7 +733,7 @@ export component SettingsWindow inherits Window {
                                         HorizontalLayout {
                                             spacing: 20px;
                                             Body {
-                                                text: "不透明度";
+                                                text: root.t.opacity-label;
                                                 width: 110px;
                                             }
 
@@ -740,15 +753,19 @@ export component SettingsWindow inherits Window {
                                         }
 
                                         ToggleRow {
-                                            text: "垂直同步";
-                                            hint: "重启程序后生效";
+                                            text: root.t.vsync-label;
+                                            on-label: root.t.toggle-on;
+                                            off-label: root.t.toggle-off;
+                                            hint: root.t.restart-hint;
                                             checked: root.vsync;
                                             toggled(value) => { root.patch-bool("vsync", value); }
                                         }
 
                                         ToggleRow {
-                                            text: "GPU 加速";
-                                            hint: "重启程序后生效";
+                                            text: root.t.gpu-label;
+                                            on-label: root.t.toggle-on;
+                                            off-label: root.t.toggle-off;
+                                            hint: root.t.restart-hint;
                                             checked: root.gpu;
                                             toggled(value) => { root.patch-bool("gpu_acceleration", value); }
                                         }
@@ -761,17 +778,19 @@ export component SettingsWindow inherits Window {
                                         padding: 22px;
                                         spacing: 15px;
                                         Heading {
-                                            text: "桌面位置";
+                                            text: root.t.position-section;
                                         }
 
                                         ToggleRow {
-                                            text: "一起拖动所有角色";
+                                            text: root.t.move-together-label;
+                                            on-label: root.t.toggle-on;
+                                            off-label: root.t.toggle-off;
                                             checked: root.move-together;
                                             toggled(value) => { root.patch-bool("move_all_roles_together", value); }
                                         }
 
                                         ActionButton {
-                                            text: "重置所有角色位置";
+                                            text: root.t.reset-positions-button;
                                             width: 190px;
                                             clicked => { root.reset-positions(); }
                                         }
@@ -784,14 +803,14 @@ export component SettingsWindow inherits Window {
                     if root.page == 2: VerticalLayout {
                         spacing: 18px;
                         Body {
-                            text: "角色行为";
+                            text: root.t.nav-behavior;
                             font-size: 28px;
                             font-weight: 700;
                             height: 40px;
                         }
 
                         Hint {
-                            text: "设置角色如何回应你，以及点击各个区域时的反馈。";
+                            text: root.t.behavior-hint;
                         }
 
                         ScrollView {
@@ -804,42 +823,54 @@ export component SettingsWindow inherits Window {
                                         padding: 22px;
                                         spacing: 10px;
                                         Heading {
-                                            text: "交互与陪伴";
+                                            text: root.t.behavior-section;
                                         }
 
                                         ToggleRow {
-                                            text: "拖拽锁定";
-                                            hint: "开启后无法拖动桌宠";
+                                            text: root.t.drag-locked-label;
+                                            on-label: root.t.toggle-on;
+                                            off-label: root.t.toggle-off;
+                                            hint: root.t.drag-locked-hint;
                                             checked: root.drag-locked;
                                             toggled(value) => { root.patch-bool("drag_locked", value); }
                                         }
 
                                         ToggleRow {
-                                            text: "看向鼠标";
+                                            text: root.t.head-tracking-label;
+                                            on-label: root.t.toggle-on;
+                                            off-label: root.t.toggle-off;
                                             checked: root.head-tracking;
                                             toggled(value) => { root.patch-bool("live2d_head_tracking_enabled", value); }
                                         }
 
                                         ToggleRow {
-                                            text: "角色对视";
+                                            text: root.t.mutual-gaze-label;
+                                            on-label: root.t.toggle-on;
+                                            off-label: root.t.toggle-off;
                                             checked: root.mutual-gaze;
                                             toggled(value) => { root.patch-bool("live2d_mutual_gaze_enabled", value); }
                                         }
 
                                         ToggleRow {
-                                            text: "角色待机动作";
+                                            text: root.t.idle-actions-label;
+                                            on-label: root.t.toggle-on;
+                                            off-label: root.t.toggle-off;
                                             checked: root.idle-actions;
                                             toggled(value) => { root.patch-bool("live2d_idle_actions_enabled", value); }
                                         }
 
                                         ToggleRow {
-                                            text: "启用随机动作";
+                                            text: root.t.random-actions-label;
+                                            on-label: root.t.toggle-on;
+                                            off-label: root.t.toggle-off;
                                             checked: root.random-actions;
                                             toggled(value) => { root.patch-bool("live2d_random_actions_enabled", value); }
                                         }
 
                                         ToggleRow {
-                                            text: "本地情绪位移";
+                                            text: root.t.emotion-label;
+                                            on-label: root.t.toggle-on;
+                                            off-label: root.t.toggle-off;
                                             checked: root.emotion;
                                             toggled(value) => { root.patch-bool("emotion_behavior_enabled", value); }
                                         }
@@ -852,17 +883,17 @@ export component SettingsWindow inherits Window {
                                         padding: 22px;
                                         spacing: 14px;
                                         Heading {
-                                            text: "点击动作反馈";
+                                            text: root.t.click-feedback-heading;
                                         }
 
                                         Hint {
-                                            text: "留在自动匹配时，会按点击位置选择合适反馈。动作和表情可分别设置。";
+                                            text: root.t.click-hint;
                                         }
 
                                         HorizontalLayout {
                                             spacing: 14px;
                                             Body {
-                                                text: "内置预设";
+                                                text: root.t.preset-label;
                                                 width: 130px;
                                             }
 
@@ -872,7 +903,7 @@ export component SettingsWindow inherits Window {
                                             }
 
                                             ActionButton {
-                                                text: "套用预设";
+                                                text: root.t.apply-preset-button;
                                                 width: 110px;
                                                 enabled: root.has-model;
                                                 clicked => { root.apply-preset(root.preset-index == 0 ? "auto" : (root.preset-index == 1 ? "genki" : (root.preset-index == 2 ? "tsundere" : (root.preset-index == 3 ? "shy" : (root.preset-index == 4 ? "cool" : (root.preset-index == 5 ? "surprised" : "random")))))); }
@@ -882,17 +913,17 @@ export component SettingsWindow inherits Window {
                                         HorizontalLayout {
                                             spacing: 14px;
                                             Hint {
-                                                text: "点击区域";
+                                                text: root.t.region-column;
                                                 width: 130px;
                                             }
 
                                             Hint {
-                                                text: "动作";
+                                                text: root.t.motion-column;
                                                 horizontal-stretch: 1;
                                             }
 
                                             Hint {
-                                                text: "表情";
+                                                text: root.t.expression-column;
                                                 horizontal-stretch: 1;
                                             }
                                         }
@@ -908,14 +939,14 @@ export component SettingsWindow inherits Window {
                                                 model: root.motion-options;
                                                 current-index: row.motion-index;
                                                 enabled: root.has-model;
-                                                selected(value) => { root.edit-region(index, "motion", value); }
+                                                selected => { root.edit-region(index, "motion", self.current-index); }
                                             }
 
                                             ComboBox {
                                                 model: root.expression-options;
                                                 current-index: row.expression-index;
                                                 enabled: root.has-model;
-                                                selected(value) => { root.edit-region(index, "expression", value); }
+                                                selected => { root.edit-region(index, "expression", self.current-index); }
                                             }
                                         }
                                     }
@@ -927,14 +958,14 @@ export component SettingsWindow inherits Window {
                     if root.page == 4: VerticalLayout {
                         spacing: 14px;
                         Body {
-                            text: "模型下载与更新";
+                            text: root.t.nav-downloads;
                             font-size: 28px;
                             font-weight: 700;
                             height: 40px;
                         }
 
                         Hint {
-                            text: "按乐队下载角色模型包。更新会重新下载最新资源，完成后自动刷新角色和服装列表。";
+                            text: root.t.downloads-hint;
                         }
 
                         if root.no-installed-models: Panel {
@@ -944,11 +975,11 @@ export component SettingsWindow inherits Window {
                                 padding: 12px;
                                 spacing: 3px;
                                 Heading {
-                                    text: "尚未发现可用模型";
+                                    text: root.t.no-models-heading;
                                 }
 
                                 Hint {
-                                    text: "点击角色右侧的「下载」，完成后点击「选择服装」即可开始使用。";
+                                    text: root.t.no-models-hint;
                                     font-size: 12px;
                                 }
                             }
@@ -956,35 +987,35 @@ export component SettingsWindow inherits Window {
                         HorizontalLayout {
                             spacing: 8px;
                             LineEdit {
-                                placeholder-text: "搜索角色 / 乐队";
+                                placeholder-text: root.t.download-search-placeholder;
                                 text <=> root.download-search;
                                 horizontal-stretch: 1;
                             }
 
                             ActionButton {
-                                text: "下载缺失";
-                                width: 94px;
+                                text: root.t.download-missing-button;
+                                width: 112px;
                                 enabled: !root.download-busy;
                                 clicked => { root.download-batch(false); }
                             }
 
                             ActionButton {
-                                text: "更新已安装";
-                                width: 106px;
+                                text: root.t.update-installed-button;
+                                width: 124px;
                                 enabled: !root.download-busy;
                                 clicked => { root.download-batch(true); }
                             }
 
                             ActionButton {
-                                text: "刷新";
-                                width: 66px;
+                                text: root.t.refresh-button;
+                                width: 82px;
                                 enabled: !root.download-busy;
                                 clicked => { root.refresh-downloads(); }
                             }
 
                             ActionButton {
-                                text: "打开目录";
-                                width: 94px;
+                                text: root.t.open-folder-button;
+                                width: 112px;
                                 clicked => { root.open-folder(); }
                             }
                         }
@@ -996,8 +1027,8 @@ export component SettingsWindow inherits Window {
                             }
 
                             if root.download-busy && !root.download-scanning: ActionButton {
-                                text: "取消下载";
-                                width: 96px;
+                                text: root.t.cancel-download-button;
+                                width: 112px;
                                 clicked => { root.cancel-downloads(); }
                             }
                         }
@@ -1034,13 +1065,13 @@ export component SettingsWindow inherits Window {
                                                 }
 
                                                 if row.installed: ActionButton {
-                                                    text: "选择服装";
-                                                    width: 94px;
+                                                    text: root.t.choose-costume-button;
+                                                    width: 106px;
                                                     enabled: !row.active;
                                                     clicked => { root.use-package(row.key); }
                                                 }
                                                 if row.available: ActionButton {
-                                                    text: row.active ? "处理中…" : row.action;
+                                                    text: row.active ? root.t.processing : row.action;
                                                     primary: !row.installed;
                                                     width: 104px;
                                                     enabled: !root.download-busy;
@@ -1072,7 +1103,7 @@ export component SettingsWindow inherits Window {
                         }
 
                         Hint {
-                            text: "来源：ModelScope · BanG-Dream-Live2D";
+                            text: root.t.download-source;
                             font-size: 11px;
                         }
                     }
@@ -1080,7 +1111,7 @@ export component SettingsWindow inherits Window {
                     if root.page == 3: VerticalLayout {
                         spacing: 18px;
                         Body {
-                            text: "关于";
+                            text: root.t.nav-about;
                             font-size: 28px;
                             font-weight: 700;
                             height: 40px;
@@ -1126,13 +1157,13 @@ export component SettingsWindow inherits Window {
                                             }
                                         }
                                         ActionButton {
-                                            text: "打开模型目录";
+                                            text: root.t.open-model-folder-button;
                                             width: 160px;
                                             clicked => { root.open-folder(); }
                                         }
 
                                         Hint {
-                                            text: "Live2D 运行时：Neocari（GPL-3.0-only）。模型与角色素材版权归 Craft Egg / Bushiroad 所有。";
+                                            text: root.t.about-license;
                                             font-size: 12px;
                                         }
                                     }
@@ -1219,16 +1250,16 @@ export component SettingsWindow inherits Window {
                 padding: 24px;
                 spacing: 14px;
                 Heading {
-                    text: "导入自定义模型";
+                    text: root.t.import-title;
                 }
 
                 Hint {
-                    text: "填写 .zst 模型归档的完整路径。归档中每套服装需包含 model.json 或 *.model3.json。";
+                    text: root.t.import-hint;
                 }
 
                 LineEdit {
                     text <=> root.import-path;
-                    placeholder-text: "C:\\模型\\character.zst";
+                    placeholder-text: root.t.import-placeholder;
                     enabled: !root.importing;
                 }
 
@@ -1239,7 +1270,7 @@ export component SettingsWindow inherits Window {
 
                 HorizontalLayout {
                     ActionButton {
-                        text: "打开模型目录";
+                        text: root.t.open-model-folder-button;
                         clicked => { root.open-folder(); }
                     }
 
@@ -1249,13 +1280,13 @@ export component SettingsWindow inherits Window {
                     }
 
                     ActionButton {
-                        text: "取消";
+                        text: root.t.import-cancel-button;
                         enabled: !root.importing;
                         clicked => { root.import-visible = false; }
                     }
 
                     ActionButton {
-                        text: root.importing ? "正在导入…" : "导入";
+                        text: root.importing ? root.t.import-busy : root.t.import-button;
                         primary: true;
                         enabled: !root.importing && root.import-path != "";
                         clicked => { root.import-archive(root.import-path); }
@@ -1276,18 +1307,21 @@ export struct RadialItem {
 }
 
 export component RadialMenu inherits Window {
-    title: "BANDORI-PET-LITE 菜单";
+    title: root.t.menu-title;
     preferred-width: 360px;
     preferred-height: 360px;
     no-frame: true;
     always-on-top: true;
     background: transparent;
+    default-font-family: root.ui-font;
 
     in-out property <[RadialItem]> items;
     in-out property <bool> locked: true;
     in property <float> spread: 0;
     in property <float> reveal: 0;
     in property <bool> interactive: false;
+    in property <Texts> t;
+    in property <string> ui-font: "Microsoft YaHei UI";
 
     callback action(string);
     callback locked-toggled(bool);
@@ -1350,7 +1384,7 @@ export component RadialMenu inherits Window {
             border-color: #55555f;
             opacity: root.reveal;
             accessible-role: button;
-            accessible-label: root.locked ? "解除拖拽锁定" : "锁定拖拽";
+            accessible-label: root.locked ? root.t.radial-unlock : root.t.radial-lock;
             accessible-action-default => { root.toggle-lock(); }
             // Drawn as an icon rather than a 🔒/🔓 glyph: emoji fonts only ship
             // outlines on Windows, so the software renderer paints nothing on Linux.

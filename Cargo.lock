@@ -3910,6 +3910,7 @@ dependencies = [
  "pet-assets",
  "pet-behavior",
  "pet-config",
+ "pet-i18n",
  "pet-input",
  "pet-ipc",
  "pet-live2d",
@@ -3938,6 +3939,7 @@ name = "pet-assets"
 version = "0.1.0"
 dependencies = [
  "pet-config",
+ "pet-i18n",
  "reqwest",
  "serde",
  "serde_json",
@@ -3963,11 +3965,16 @@ dependencies = [
 name = "pet-config"
 version = "0.1.0"
 dependencies = [
+ "pet-i18n",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tracing",
 ]
+
+[[package]]
+name = "pet-i18n"
+version = "0.1.0"
 
 [[package]]
 name = "pet-input"
@@ -3986,6 +3993,7 @@ dependencies = [
  "interprocess",
  "libc",
  "pet-config",
+ "pet-i18n",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -4026,6 +4034,7 @@ dependencies = [
  "image",
  "pet-assets",
  "pet-config",
+ "pet-i18n",
  "pet-ipc",
  "pet-live2d",
  "pet-render",

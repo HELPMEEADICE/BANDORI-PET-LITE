@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use pet_assets::catalog::Catalog;
 use pet_assets::{index, ModelCache};
 use pet_config::{ApplyLevel, Config, LoadOutcome, Paths};
+use pet_i18n::Key;
 use pet_ipc::{pipe_name, Message, ModelData, SettingsPage};
 use pet_window::placement;
 use tracing::{error, info, warn};
@@ -272,6 +273,7 @@ impl PetApp {
             }
         }
         self.expand_preset(&mut patch);
+        let previous_language = self.config.lang();
         let level = patch.highest_apply_level();
         let path = self.paths.config();
         let outcome =
@@ -298,6 +300,12 @@ impl PetApp {
                 }
                 self.apply_level(level);
                 self.sync_models_from_roles();
+                if let Some(tray) = self.tray.as_mut() {
+                    tray.set_language(self.config.lang());
+                }
+                if self.config.lang() != previous_language {
+                    info!(language = %self.config.language, "UI language changed");
+                }
                 if self.config_dirty {
                     self.persist_now();
                 }
@@ -316,7 +324,10 @@ impl PetApp {
                 });
                 self.ipc.send(&Message::Error {
                     kind: "config".to_owned(),
-                    message: format!("保存设置失败：{error}"),
+                    message: self
+                        .config
+                        .lang()
+                        .format(Key::AppConfigSaveFailed, &[&error.to_string()]),
                 });
             }
         }
@@ -406,7 +417,7 @@ impl PetApp {
             ApplyLevel::RestartApp => {
                 self.ipc.send(&Message::Error {
                     kind: "restart".to_owned(),
-                    message: "该设置将在下次启动时生效".to_owned(),
+                    message: self.config.lang().text(Key::AppRestartRequired).to_owned(),
                 });
             }
         }
@@ -454,9 +465,9 @@ impl PetApp {
                         error!(%error, "failed to swap model");
                         self.ipc.send(&Message::Error {
                             kind: "model".to_owned(),
-                            message: format!(
-                                "无法加载角色 {} 的服装 {}：{error}",
-                                entry.character, entry.costume
+                            message: self.config.lang().format(
+                                Key::AppCostumeLoadFailed,
+                                &[&entry.character, &entry.costume, &error.to_string()],
                             ),
                         });
                         new_roles.push(role);
@@ -490,7 +501,10 @@ impl PetApp {
                         error!(character = %entry.character, %error, "failed to create role window");
                         self.ipc.send(&Message::Error {
                             kind: "model".to_owned(),
-                            message: format!("无法加载角色 {}：{error}", entry.character),
+                            message: self.config.lang().format(
+                                Key::AppCharacterLoadFailed,
+                                &[&entry.character, &error.to_string()],
+                            ),
                         });
                     }
                 }
@@ -639,9 +653,9 @@ impl PetApp {
                     if let Err(error) = role.swap_model(&entry, &self.cache, &self.config) {
                         self.ipc.send(&Message::Error {
                             kind: "model".into(),
-                            message: format!(
-                                "模型已更新，但重新加载 {} 失败：{error}",
-                                role.character
+                            message: self.config.lang().format(
+                                Key::AppModelReloadFailed,
+                                &[&role.character, &error.to_string()],
                             ),
                         });
                     }
@@ -715,7 +729,10 @@ impl PetApp {
             error!(%error, "failed to write config");
             self.ipc.send(&Message::Error {
                 kind: "config".to_owned(),
-                message: format!("保存设置失败：{error}"),
+                message: self
+                    .config
+                    .lang()
+                    .format(Key::AppConfigSaveFailed, &[&error.to_string()]),
             });
         } else {
             self.config_dirty = false;
@@ -1002,7 +1019,7 @@ impl PetApp {
         // The tray is built only after the first frame so it cannot delay it.
         if self.create_tray && self.tray.is_none() {
             if let Some(sender) = self.tray_sender.take() {
-                self.tray = Tray::new(sender)
+                self.tray = Tray::new(sender, self.config.lang())
                     .map_err(|error| {
                         warn!(%error, "tray icon unavailable");
                         error
@@ -1083,7 +1100,7 @@ pub fn run(paths: Paths) -> AppResult<()> {
 
 /// Convenience for the About page (delegates to `pet-config`).
 pub fn about_lines(paths: &Paths, config: &Config) -> Vec<(String, String)> {
-    pet_config::paths::about_lines(paths, config)
+    pet_config::paths::about_lines(paths, config, config.lang())
 }
 
 #[cfg(test)]

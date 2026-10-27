@@ -96,32 +96,32 @@ impl MenuItem {
     /// Builds the four LITE radial-menu items in the original order
     /// (chat and pixel are out of scope for v0).
     pub fn lite_items(language: &str) -> Vec<Self> {
-        let zh = !language.starts_with("en");
+        let lang = pet_i18n::Lang::from_tag(language);
         vec![
             MenuItem {
                 action: "costume".to_owned(),
-                label: if zh { "换装" } else { "Outfit" }.to_owned(),
+                label: lang.text(pet_i18n::Key::MenuOutfit).to_owned(),
                 glyph: "\u{1F457}".to_owned(),
                 color: [220, 50, 120],
                 enabled: true,
             },
             MenuItem {
                 action: "motion".to_owned(),
-                label: if zh { "动作" } else { "Motion" }.to_owned(),
+                label: lang.text(pet_i18n::Key::MenuMotion).to_owned(),
                 glyph: "\u{1F3AC}".to_owned(),
                 color: [30, 144, 255],
                 enabled: true,
             },
             MenuItem {
                 action: "settings".to_owned(),
-                label: if zh { "设置" } else { "Settings" }.to_owned(),
+                label: lang.text(pet_i18n::Key::MenuSettings).to_owned(),
                 glyph: "\u{2699}".to_owned(),
                 color: [138, 43, 226],
                 enabled: true,
             },
             MenuItem {
                 action: "hide".to_owned(),
-                label: if zh { "隐藏" } else { "Hide" }.to_owned(),
+                label: lang.text(pet_i18n::Key::MenuHide).to_owned(),
                 glyph: "\u{1F441}".to_owned(),
                 color: [91, 91, 116],
                 enabled: true,
@@ -458,6 +458,12 @@ mod tests {
         assert_eq!(items[3].action, "hide");
         let english = MenuItem::lite_items("en_US");
         assert_eq!(english[0].label, "Outfit");
+        let korean = MenuItem::lite_items("ko_KR");
+        assert_eq!(korean[2].label, "설정");
+        let japanese = MenuItem::lite_items("ja_JP");
+        assert_eq!(japanese[1].label, "モーション");
+        let traditional = MenuItem::lite_items("zh_TW");
+        assert_ne!(traditional[0].label, items[0].label);
     }
 
     #[test]

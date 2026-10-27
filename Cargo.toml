@@ -6,6 +6,7 @@ resolver = "2"
 # `cargo test --workspace` green while still building it as a dependency.
 exclude = ["vendor/neocari"]
 members = [
+    "crates/pet-i18n",
     "crates/pet-config",
     "crates/pet-assets",
     "crates/pet-live2d",
@@ -29,6 +30,7 @@ authors = ["BANDORI-PET-LITE contributors"]
 repository = "https://github.com/HELPMEEADICE/Neocari"
 
 [workspace.dependencies]
+pet-i18n = { path = "crates/pet-i18n" }
 pet-config = { path = "crates/pet-config" }
 pet-assets = { path = "crates/pet-assets" }
 pet-live2d = { path = "crates/pet-live2d" }

@@ -7,6 +7,7 @@ mod downloads;
 mod picker;
 mod preview;
 mod radial;
+mod texts;
 #[cfg(test)]
 use radial::items_to_slint;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,9 +17,10 @@ use std::time::Duration;
 
 use pet_assets::catalog::Catalog;
 use pet_config::{ClickAction, Config, Paths, SettingsPatch, CLICK_REGIONS};
+use pet_i18n::{Key, Lang};
 use pet_ipc::{Connection, Message, ModelData, SettingsPage};
 use slint::winit_030::WinitWindowAccessor;
-use slint::{ModelRc, Timer, TimerMode, VecModel};
+use slint::{Model, ModelRc, Timer, TimerMode, VecModel};
 use tracing::{info, warn};
 
 slint::include_modules!();
@@ -39,6 +41,8 @@ struct Shared {
     config: Mutex<Option<Config>>,
     model: Mutex<ModelData>,
     connected: AtomicBool,
+    /// Language currently rendered by the window and the radial menu.
+    language: Mutex<Option<Lang>>,
 }
 
 /// Message sender shared by every callback.
@@ -49,13 +53,17 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
     let creating_popup = radial::initialize_backend()?;
     let window = SettingsWindow::new()?;
     window.set_obs_supported(cfg!(windows));
+    texts::apply(&window, Lang::default());
+    window.set_status(window.get_t().status_connecting.clone());
     creating_popup.set(true);
     let radial = RadialMenu::new()?;
+    texts::apply_radial(&radial, Lang::default());
     // Slint creates its window adapter lazily. Capture the popup attributes
     // while this component, rather than the settings window, is being built.
     let _ = radial.window().has_winit_window();
     creating_popup.set(false);
     let radial_controller = radial::Controller::new(&radial);
+    let radial_weak = radial.as_weak();
     let index = pet_assets::index::load_or_scan(&paths.models());
     let catalog = Rc::new(RefCell::new(Catalog::build(&paths.assets(), &index)));
     info!(
@@ -68,6 +76,7 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
         config: Mutex::new(None),
         model: Mutex::new(ModelData::default()),
         connected: AtomicBool::new(false),
+        language: Mutex::new(Some(Lang::default())),
     });
 
     // ── IPC client thread ────────────────────────────────────────────────────
@@ -108,7 +117,7 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
     downloads.wire(&window);
     downloads.refresh(&window);
     window.set_about_lines(ModelRc::new(VecModel::from(
-        pet_config::about_lines(paths, &Config::default())
+        pet_config::about_lines(paths, &Config::default(), Lang::default())
             .into_iter()
             .map(|(label, value)| AboutLine {
                 label: label.into(),
@@ -174,10 +183,14 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
             };
             if send(&request) {
                 picker.close_preview(&window);
-                window.set_status("正在切换模型…".into());
+                window.set_status(
+                    texts::lang_of(&window)
+                        .text(Key::StatusSwitchingModel)
+                        .into(),
+                );
                 window.set_picking_model(false);
             } else {
-                window.set_status("桌宠进程未连接".into());
+                window.set_status(texts::lang_of(&window).text(Key::StatusNotConnected).into());
             }
         });
     }
@@ -198,19 +211,12 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                         serde_json::json!(window.get_hide_model()),
                     ),
                     ("auto_start", serde_json::json!(window.get_autostart())),
-                    (
-                        "language",
-                        serde_json::json!(if window.get_language_index() == 1 {
-                            "en_US"
-                        } else {
-                            "zh_CN"
-                        }),
-                    ),
+                    ("language", serde_json::json!(texts::lang_of(&window).tag())),
                 ]);
                 if send(&Message::SettingsPatch { patch }) {
                     window.set_options_dirty(false);
                 } else {
-                    window.set_status("桌宠进程未连接".into());
+                    window.set_status(texts::lang_of(&window).text(Key::StatusNotConnected).into());
                 }
             }
         });
@@ -238,7 +244,7 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                     window.set_picking_model(false);
                     window.set_adding_model(false);
                 } else {
-                    window.set_status("桌宠进程未连接".into());
+                    window.set_status(texts::lang_of(&window).text(Key::StatusNotConnected).into());
                 }
             }
         });
@@ -256,7 +262,7 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
             }
             if config.models.len() <= 1 {
                 if let Some(window) = weak.upgrade() {
-                    window.set_status("请至少保留一个角色".into());
+                    window.set_status(texts::lang_of(&window).text(Key::StatusKeepOneRole).into());
                 }
                 return;
             }
@@ -275,7 +281,7 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
             ]);
             if !send(&Message::SettingsPatch { patch }) {
                 if let Some(window) = weak.upgrade() {
-                    window.set_status("桌宠进程未连接".into());
+                    window.set_status(texts::lang_of(&window).text(Key::StatusNotConnected).into());
                 }
             }
         });
@@ -312,6 +318,8 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
     let pump_paths = paths.clone();
     let pump_catalog = Rc::clone(&catalog);
     let pump_picker = Rc::clone(&picker);
+    let pump_downloads = Rc::clone(&downloads);
+    let pump_radial_weak = radial_weak.clone();
     let timer = Timer::default();
     timer.start(TimerMode::Repeated, Duration::from_millis(100), move || {
         let Some(window) = pump_window.upgrade() else {
@@ -338,6 +346,14 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                     if !was_connected {
                         window.set_status("".into());
                     }
+                    sync_language(
+                        &window,
+                        &parsed,
+                        &pump_shared,
+                        &pump_radial_weak,
+                        &pump_picker,
+                        &pump_downloads,
+                    );
                     pump_picker.update_config(&window, &parsed);
                     apply_config_to_window(
                         &window,
@@ -352,11 +368,6 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                     rejected,
                     config,
                 } => {
-                    if ok {
-                        window.set_status("已保存".into());
-                    } else {
-                        window.set_status(format!("保存被拒绝：{}", rejected.join(", ")).into());
-                    }
                     let mut parsed: Config = serde_json::from_value(config).unwrap_or_default();
                     parsed.normalize_models();
                     pump_radial.sync_locked(parsed.drag_locked);
@@ -368,6 +379,24 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                         .lock()
                         .map(|guard| guard.clone())
                         .unwrap_or_default();
+                    // The status line follows the language the patch just selected.
+                    sync_language(
+                        &window,
+                        &parsed,
+                        &pump_shared,
+                        &pump_radial_weak,
+                        &pump_picker,
+                        &pump_downloads,
+                    );
+                    let lang = texts::lang_of(&window);
+                    if ok {
+                        window.set_status(lang.text(Key::StatusSaved).into());
+                    } else {
+                        window.set_status(
+                            lang.format(Key::StatusSaveRejected, &[&rejected.join(", ")])
+                                .into(),
+                        );
+                    }
                     pump_picker.update_config(&window, &parsed);
                     apply_config_to_window(
                         &window,
@@ -387,6 +416,14 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
                         .ok()
                         .and_then(|guard| guard.clone())
                         .unwrap_or_default();
+                    sync_language(
+                        &window,
+                        &config,
+                        &pump_shared,
+                        &pump_radial_weak,
+                        &pump_picker,
+                        &pump_downloads,
+                    );
                     pump_picker.update_config(&window, &config);
                     apply_config_to_window(
                         &window,
@@ -457,6 +494,40 @@ fn reset_role_list(window: &SettingsWindow) {
     window.set_picking_model(false);
     window.set_adding_model(false);
     window.set_import_visible(false);
+}
+
+/// Re-renders every language-dependent surface when `config` selects a new
+/// language. Rows and notices are rebuilt in the same pass, so switching
+/// language never needs a restart.
+fn sync_language(
+    window: &SettingsWindow,
+    config: &Config,
+    shared: &Shared,
+    radial: &slint::Weak<RadialMenu>,
+    picker: &Rc<picker::Picker>,
+    downloads: &Rc<downloads::Downloads>,
+) {
+    let lang = Lang::from_tag(&config.language);
+    let changed = match shared.language.lock() {
+        Ok(mut guard) => {
+            if *guard == Some(lang) {
+                false
+            } else {
+                *guard = Some(lang);
+                true
+            }
+        }
+        Err(_) => return,
+    };
+    if !changed {
+        return;
+    }
+    texts::apply(window, lang);
+    if let Some(radial) = radial.upgrade() {
+        texts::apply_radial(&radial, lang);
+    }
+    picker.refresh(window);
+    downloads.refresh(window);
 }
 
 fn page_index(page: SettingsPage) -> i32 {
@@ -554,15 +625,27 @@ fn wire_patches(window: &SettingsWindow, send: &Sender) {
     }
     {
         let send = Rc::clone(send);
+        let weak = window.as_weak();
         window.on_edit_region(move |index, field, option| {
             let Some(region) = CLICK_REGIONS.get(index as usize).copied() else {
                 return;
             };
-            let value = match option.as_str() {
-                "自动匹配" => ClickAction::AUTO.to_owned(),
-                "随机动作" => ClickAction::RANDOM.to_owned(),
-                "不触发" => ClickAction::NONE.to_owned(),
-                other => other.to_owned(),
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
+            let options = if field.as_str() == "expression" {
+                window.get_expression_options()
+            } else {
+                window.get_motion_options()
+            };
+            let value = match option {
+                0 => ClickAction::AUTO.to_owned(),
+                1 => ClickAction::RANDOM.to_owned(),
+                2 => ClickAction::NONE.to_owned(),
+                other => match options.row_data(other as usize) {
+                    Some(name) => name.to_string(),
+                    None => return,
+                },
             };
             let mut patch = SettingsPatch::default();
             patch.values.insert(
@@ -570,6 +653,25 @@ fn wire_patches(window: &SettingsWindow, send: &Sender) {
                 serde_json::json!(value),
             );
             let _ = send(&Message::SettingsPatch { patch });
+        });
+    }
+    {
+        // Picking a language applies it immediately; the apply button keeps the
+        // other sidebar toggles explicit.
+        let send = Rc::clone(send);
+        let weak = window.as_weak();
+        window.on_language_selected(move |index| {
+            let lang = Lang::from_slint_index(index);
+            let mut patch = SettingsPatch::default();
+            patch
+                .values
+                .insert("language".to_owned(), serde_json::json!(lang.tag()));
+            if !send(&Message::SettingsPatch { patch }) {
+                if let Some(window) = weak.upgrade() {
+                    window.set_language_index(texts::lang_of(&window).index() as i32);
+                    window.set_status(texts::lang_of(&window).text(Key::StatusNotConnected).into());
+                }
+            }
         });
     }
     {
@@ -604,6 +706,7 @@ fn apply_config_to_window(
     paths: &Paths,
     catalog: &Catalog,
 ) {
+    let lang = Lang::from_tag(&config.language);
     window.set_fps(config.fps as i32);
     window.set_window_opacity(config.opacity * 100.0);
     window.set_scale(if config.live2d_scale == 0 {
@@ -632,13 +735,10 @@ fn apply_config_to_window(
         window.set_obs(config.obs_window_capture_compatible);
         window.set_topmost(config.game_topmost);
         window.set_autostart(config.auto_start);
-        window.set_language_index(if config.language.starts_with("en") {
-            1
-        } else {
-            0
-        });
         window.set_hide_model(config.hide_live2d_model);
     }
+    // The language is never gated by unsaved toggles: it switches at once.
+    window.set_language_index(lang.index() as i32);
     window.set_move_together(config.move_all_roles_together);
 
     window.set_has_model(!config.models.is_empty());
@@ -657,11 +757,28 @@ fn apply_config_to_window(
         character
             .map(|entry| entry.display.as_str())
             .unwrap_or(if config.character.is_empty() {
-                "尚未选择角色"
+                lang.text(Key::NeverSelected)
             } else {
                 &config.character
             })
             .into(),
+    );
+    window.set_roles_heading(
+        format!(
+            "{}{}{}",
+            lang.text(Key::RolesHeadingPrefix),
+            config.models.len(),
+            lang.text(Key::RolesHeadingSuffix)
+        )
+        .into(),
+    );
+    window.set_first_run_banner(
+        lang.text(if catalog.is_empty() {
+            Key::FirstRunWelcomeEmpty
+        } else {
+            Key::FirstRunWelcome
+        })
+        .into(),
     );
     window.set_active_band(
         character
@@ -690,19 +807,21 @@ fn apply_config_to_window(
         populate_costumes(window, catalog, &config.character, Some(&config.costume));
     }
     window.set_model_info(
-        format!(
-            "格式 {} · 动作 {} · 表情 {} · 绘制 {} · 纹理 {}",
-            model.format,
-            model.motions.len(),
-            model.expressions.len(),
-            model.drawables,
-            model.textures
+        lang.format(
+            Key::ModelInfo,
+            &[
+                &model.format,
+                &model.motions.len().to_string(),
+                &model.expressions.len().to_string(),
+                &model.drawables.to_string(),
+                &model.textures.to_string(),
+            ],
         )
         .into(),
     );
 
-    let motion_options = build_options(&model.motions);
-    let expression_options = build_options(&model.expressions);
+    let motion_options = build_options(lang, &model.motions);
+    let expression_options = build_options(lang, &model.expressions);
     window.set_motion_options(ModelRc::new(VecModel::from(motion_options.clone())));
     window.set_expression_options(ModelRc::new(VecModel::from(expression_options.clone())));
     window.set_preset_index(
@@ -730,7 +849,7 @@ fn apply_config_to_window(
             let action = actions.get(region.key()).cloned().unwrap_or_default();
             RegionRow {
                 region: region.key().into(),
-                title: region.display_name(&config.language).into(),
+                title: region.display_name(lang).into(),
                 motion_index: option_index(&action.motion, &motion_options),
                 expression_index: option_index(&action.expression, &expression_options),
             }
@@ -739,7 +858,7 @@ fn apply_config_to_window(
     window.set_regions(ModelRc::new(VecModel::from(regions)));
 
     window.set_about_lines(ModelRc::new(VecModel::from(
-        pet_config::about_lines(paths, config)
+        pet_config::about_lines(paths, config, lang)
             .into_iter()
             .map(|(label, value)| AboutLine {
                 label: label.into(),
@@ -780,9 +899,12 @@ fn costume_display<'a>(catalog: &'a Catalog, character: &str, costume: &'a str) 
         .unwrap_or(costume)
 }
 
-fn build_options(names: &[String]) -> Vec<slint::SharedString> {
+fn build_options(lang: Lang, names: &[String]) -> Vec<slint::SharedString> {
     let mut options: Vec<slint::SharedString> =
-        vec!["自动匹配".into(), "随机动作".into(), "不触发".into()];
+        [Key::OptionAuto, Key::OptionRandom, Key::OptionNone]
+            .iter()
+            .map(|key| slint::SharedString::from(lang.text(*key)))
+            .collect();
     options.extend(names.iter().map(|name| name.clone().into()));
     options
 }
@@ -808,6 +930,13 @@ fn option_index(value: &str, options: &[slint::SharedString]) -> i32 {
 mod tests {
     use super::*;
 
+    /// A window with the default language applied, for tests that assert labels.
+    pub(super) fn test_window() -> SettingsWindow {
+        let window = SettingsWindow::new().unwrap();
+        texts::apply(&window, Lang::ZhHans);
+        window
+    }
+
     pub(super) fn settle_animations(window: &SettingsWindow) {
         // Paint the initial state, fire entrance timers, then finish transitions.
         let _ = window.window().take_snapshot().unwrap();
@@ -819,7 +948,7 @@ mod tests {
     #[test]
     fn option_lists_put_specials_first() {
         let names = vec!["smile01".to_owned()];
-        let options = build_options(&names);
+        let options = build_options(Lang::ZhHans, &names);
         assert_eq!(options.len(), 4);
         assert_eq!(options[0].as_str(), "自动匹配");
         assert_eq!(option_index("", &options), 0);
@@ -840,8 +969,15 @@ mod tests {
 
     #[test]
     fn about_rows_include_version() {
-        let lines = pet_config::about_lines(&Paths::with_root("C:/app"), &Config::default());
+        let lines = pet_config::about_lines(
+            &Paths::with_root("C:/app"),
+            &Config::default(),
+            Lang::ZhHans,
+        );
         assert!(lines.iter().any(|(label, _)| label == "版本"));
+        let english =
+            pet_config::about_lines(&Paths::with_root("C:/app"), &Config::default(), Lang::En);
+        assert!(english.iter().any(|(label, _)| label == "Version"));
     }
 
     #[test]
@@ -861,7 +997,7 @@ mod tests {
             ..Default::default()
         })))
         .unwrap();
-        let window = SettingsWindow::new().unwrap();
+        let window = test_window();
         let config = Config {
             models: vec![
                 pet_config::ModelEntry::new(
@@ -931,7 +1067,7 @@ mod tests {
             ..Default::default()
         })))
         .unwrap();
-        let window = SettingsWindow::new().unwrap();
+        let window = test_window();
         window.set_theme(1);
         window.set_has_model(true);
         window.set_active_character_label("户山香澄".into());
@@ -1032,8 +1168,14 @@ mod tests {
                 .window()
                 .set_size(slint::LogicalSize::new(1180., 680.));
             window.set_picking_model(false);
-            window.set_motion_options(ModelRc::new(VecModel::from(build_options(&[]))));
-            window.set_expression_options(ModelRc::new(VecModel::from(build_options(&[]))));
+            window.set_motion_options(ModelRc::new(VecModel::from(build_options(
+                Lang::ZhHans,
+                &[],
+            ))));
+            window.set_expression_options(ModelRc::new(VecModel::from(build_options(
+                Lang::ZhHans,
+                &[],
+            ))));
             window.set_active_models(ModelRc::new(VecModel::from(vec![AboutLine {
                 label: "户山香澄".into(),
                 value: "295期 Star Trajectory".into(),

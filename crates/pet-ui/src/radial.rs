@@ -628,6 +628,7 @@ mod tests {
         })))
         .unwrap();
         let menu = RadialMenu::new().unwrap();
+        crate::texts::apply_radial(&menu, pet_i18n::Lang::ZhHans);
         menu.set_items(ModelRc::new(VecModel::from(items_to_slint(
             &pet_ipc::MenuItem::lite_items("zh_CN"),
         ))));

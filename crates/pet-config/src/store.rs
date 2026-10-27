@@ -5,6 +5,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use pet_i18n::{Key, Lang};
 use tracing::{info, warn};
 
 use crate::config::Config;
@@ -129,10 +130,9 @@ pub fn load_config(path: &Path) -> LoadOutcome {
             };
             let mut config = Config::default();
             warnings.extend(sanitize(&mut config));
-            warnings.push(format!(
-                "config.json 损坏，已改用默认值（原文件备份为 {}）",
-                backup.display()
-            ));
+            warnings.push(
+                Lang::default().format(Key::ConfigRecovered, &[&backup.display().to_string()]),
+            );
             LoadOutcome {
                 config,
                 source,
@@ -209,9 +209,9 @@ pub fn sanitize(config: &mut Config) -> Vec<String> {
             .clamp(bounds::SCALE_MIN, bounds::SCALE_MAX);
     }
 
-    if config.language.is_empty() {
-        config.language = "zh_CN".to_owned();
-    }
+    // Tags written by other builds ("zh-Hant", "en", …) collapse to the shipped
+    // tag so the language dropdown always finds the configured entry.
+    config.language = Lang::from_tag(&config.language).tag().to_owned();
 
     config.normalize_models();
 

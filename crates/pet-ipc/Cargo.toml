@@ -7,6 +7,7 @@ license.workspace = true
 description = "Named-pipe IPC between bandori-pet and bandori-ui."
 
 [dependencies]
+pet-i18n.workspace = true
 pet-config.workspace = true
 serde.workspace = true
 serde_json.workspace = true

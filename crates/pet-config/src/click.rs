@@ -1,5 +1,6 @@
 //! Click-region identifiers and the per-region motion/expression action type.
 
+use pet_i18n::{Key, Lang};
 use serde::{Deserialize, Serialize};
 
 /// The seven clickable body regions, in the order shown by the settings UI.
@@ -50,39 +51,22 @@ impl ClickRegion {
         }
     }
 
-    /// Localized (zh_CN) display name, identical to the original UI copy.
-    pub fn display_name_zh(self) -> &'static str {
+    /// Catalogue key of the display name.
+    pub fn display_name_key(self) -> Key {
         match self {
-            ClickRegion::Head => "脸和头发",
-            ClickRegion::UpperBodyLeft => "左肩/左手附近",
-            ClickRegion::UpperBodyCenter => "胸口/衣领附近",
-            ClickRegion::UpperBodyRight => "右肩/右手附近",
-            ClickRegion::LowerBodyLeft => "左侧裙摆/腿部",
-            ClickRegion::LowerBodyCenter => "腰部/裙摆中间",
-            ClickRegion::LowerBodyRight => "右侧裙摆/腿部",
+            ClickRegion::Head => Key::RegionHead,
+            ClickRegion::UpperBodyLeft => Key::RegionUpperBodyLeft,
+            ClickRegion::UpperBodyCenter => Key::RegionUpperBodyCenter,
+            ClickRegion::UpperBodyRight => Key::RegionUpperBodyRight,
+            ClickRegion::LowerBodyLeft => Key::RegionLowerBodyLeft,
+            ClickRegion::LowerBodyCenter => Key::RegionLowerBodyCenter,
+            ClickRegion::LowerBodyRight => Key::RegionLowerBodyRight,
         }
     }
 
-    /// Localized (en_US) display name.
-    pub fn display_name_en(self) -> &'static str {
-        match self {
-            ClickRegion::Head => "Face and hair",
-            ClickRegion::UpperBodyLeft => "Left shoulder / arm",
-            ClickRegion::UpperBodyCenter => "Chest / collar",
-            ClickRegion::UpperBodyRight => "Right shoulder / arm",
-            ClickRegion::LowerBodyLeft => "Left skirt / leg",
-            ClickRegion::LowerBodyCenter => "Waist / skirt center",
-            ClickRegion::LowerBodyRight => "Right skirt / leg",
-        }
-    }
-
-    /// Display name for the given language tag.
-    pub fn display_name(self, language: &str) -> &'static str {
-        if language.starts_with("en") {
-            self.display_name_en()
-        } else {
-            self.display_name_zh()
-        }
+    /// Display name in `lang`.
+    pub fn display_name(self, lang: Lang) -> &'static str {
+        lang.text(self.display_name_key())
     }
 
     /// Parses a config key back into a region.
@@ -152,6 +136,16 @@ mod tests {
             assert_eq!(ClickRegion::from_key(region.key()), Some(region));
         }
         assert_eq!(seen.len(), 7);
+    }
+
+    #[test]
+    fn display_names_follow_the_language() {
+        assert_eq!(ClickRegion::Head.display_name(Lang::ZhHans), "脸和头发");
+        assert_eq!(ClickRegion::Head.display_name(Lang::En), "Face and hair");
+        assert_ne!(
+            ClickRegion::Head.display_name(Lang::Ja),
+            ClickRegion::Head.display_name(Lang::ZhHans)
+        );
     }
 
     #[test]

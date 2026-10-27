@@ -3,6 +3,7 @@
 use std::sync::mpsc::Sender;
 
 use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use pet_i18n::{Key, Lang};
 use tracing::{debug, warn};
 use tray_icon::{Icon, MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
@@ -21,54 +22,29 @@ pub enum TrayEvent {
     Quit,
 }
 
+/// Menu plus the action table that maps each item id to its event.
+type LocalizedMenu = (Menu, Vec<(muda::MenuId, TrayEvent)>);
+
 /// Tray icon owner. Dropping it removes the icon.
 pub struct Tray {
     _icon: TrayIcon,
     menu: Menu,
     ids: Vec<(muda::MenuId, TrayEvent)>,
     sender: Sender<TrayEvent>,
+    language: Lang,
 }
 
 impl Tray {
-    /// Builds the tray icon and menu.
-    pub fn new(sender: Sender<TrayEvent>) -> Result<Self, Box<dyn std::error::Error>> {
+    /// Builds the tray icon and menu in `language`.
+    pub fn new(
+        sender: Sender<TrayEvent>,
+        language: Lang,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         // winit does not initialize or dispatch GTK. AppIndicator and muda must
         // be created and pumped on this same event-loop thread.
         #[cfg(target_os = "linux")]
         gtk::init()?;
-        let menu = Menu::new();
-        let mut ids = Vec::new();
-
-        let show_hide = MenuItem::new("显示 / 隐藏", true, None);
-        let settings = MenuItem::new("设置…", true, None);
-        let reset = MenuItem::new("重置位置", true, None);
-        let quit = MenuItem::new("退出", true, None);
-
-        let opacity_menu = Submenu::new("不透明度", true);
-        let mut opacity_items = Vec::new();
-        for percent in [100, 80, 60, 40, 20] {
-            let item = MenuItem::new(format!("{percent}%"), true, None);
-            opacity_menu.append(&item)?;
-            opacity_items.push((
-                item.id().clone(),
-                TrayEvent::Opacity(percent as f32 / 100.0),
-            ));
-        }
-
-        menu.append(&show_hide)?;
-        menu.append(&settings)?;
-        menu.append(&reset)?;
-        menu.append(&PredefinedMenuItem::separator())?;
-        menu.append(&opacity_menu)?;
-        menu.append(&PredefinedMenuItem::separator())?;
-        menu.append(&quit)?;
-
-        ids.push((show_hide.id().clone(), TrayEvent::ToggleVisible));
-        ids.push((settings.id().clone(), TrayEvent::OpenSettings));
-        ids.push((reset.id().clone(), TrayEvent::ResetPositions));
-        ids.push((quit.id().clone(), TrayEvent::Quit));
-        ids.extend(opacity_items);
-
+        let (menu, ids) = menu_for(language)?;
         let icon = build_icon()?;
         let tray = TrayIconBuilder::new()
             .with_menu(Box::new(menu.clone()))
@@ -81,7 +57,24 @@ impl Tray {
             menu,
             ids,
             sender,
+            language,
         })
+    }
+
+    /// Rebuilds the menu when the UI language changed.
+    pub fn set_language(&mut self, language: Lang) {
+        if language == self.language {
+            return;
+        }
+        match menu_for(language) {
+            Ok((menu, ids)) => {
+                self._icon.set_menu(Some(Box::new(menu.clone())));
+                self.menu = menu;
+                self.ids = ids;
+                self.language = language;
+            }
+            Err(error) => warn!(%error, "could not relabel the tray menu"),
+        }
     }
 
     /// Polls the global muda menu event queue and forwards mapped actions.
@@ -116,16 +109,48 @@ impl Tray {
         }
     }
 
-    /// Replaces the menu (used when the language or role list changes).
-    pub fn set_menu(&mut self, menu: Menu) {
-        self._icon.set_menu(Some(Box::new(menu.clone())));
-        self.menu = menu;
-    }
-
     /// Access the current menu.
     pub fn menu(&self) -> &Menu {
         &self.menu
     }
+}
+
+/// Builds the localized menu plus the action table for each item.
+fn menu_for(language: Lang) -> Result<LocalizedMenu, Box<dyn std::error::Error>> {
+    let menu = Menu::new();
+    let mut ids = Vec::new();
+
+    let show_hide = MenuItem::new(language.text(Key::TrayShowHide), true, None);
+    let settings = MenuItem::new(language.text(Key::TraySettings), true, None);
+    let reset = MenuItem::new(language.text(Key::TrayResetPositions), true, None);
+    let quit = MenuItem::new(language.text(Key::TrayQuit), true, None);
+
+    let opacity_menu = Submenu::new(language.text(Key::TrayOpacity), true);
+    let mut opacity_items = Vec::new();
+    for percent in [100, 80, 60, 40, 20] {
+        let item = MenuItem::new(format!("{percent}%"), true, None);
+        opacity_menu.append(&item)?;
+        opacity_items.push((
+            item.id().clone(),
+            TrayEvent::Opacity(percent as f32 / 100.0),
+        ));
+    }
+
+    menu.append(&show_hide)?;
+    menu.append(&settings)?;
+    menu.append(&reset)?;
+    menu.append(&PredefinedMenuItem::separator())?;
+    menu.append(&opacity_menu)?;
+    menu.append(&PredefinedMenuItem::separator())?;
+    menu.append(&quit)?;
+
+    ids.push((show_hide.id().clone(), TrayEvent::ToggleVisible));
+    ids.push((settings.id().clone(), TrayEvent::OpenSettings));
+    ids.push((reset.id().clone(), TrayEvent::ResetPositions));
+    ids.push((quit.id().clone(), TrayEvent::Quit));
+    ids.extend(opacity_items);
+
+    Ok((menu, ids))
 }
 
 /// Embeds the same logo as the settings window, including its alpha channel.

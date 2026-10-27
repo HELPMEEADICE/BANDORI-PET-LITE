@@ -506,6 +506,12 @@ impl Config {
 
     /// Keeps one usable entry per character and preserves the selected role.
     /// Empty legacy lists retain the global pair for catalog resolution.
+    /// Selected UI language, with unknown tags falling back to the default.
+    pub fn lang(&self) -> pet_i18n::Lang {
+        pet_i18n::Lang::from_tag(&self.language)
+    }
+
+    /// Normalizes the mirrored global role fields against `models`.
     pub fn normalize_models(&mut self) {
         let mut characters = std::collections::HashSet::new();
         self.models

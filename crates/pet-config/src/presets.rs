@@ -6,6 +6,8 @@
 //! real motion/expression name lives in `pet-input`, because it needs the loaded
 //! model's name lists.
 
+use pet_i18n::{Key, Lang};
+
 use crate::click::CLICK_REGIONS;
 
 /// How a preset expands into `click_motion_actions`.
@@ -24,10 +26,10 @@ pub enum PresetMode {
 pub struct Preset {
     /// Config token, also the profile name (`genki`).
     pub name: &'static str,
-    /// Chinese display name.
-    pub label_zh: &'static str,
-    /// Chinese one-line description.
-    pub description_zh: &'static str,
+    /// Catalogue key of the display name.
+    pub label_key: Key,
+    /// Catalogue key of the one-line description.
+    pub description_key: Key,
     /// `(region key, motion/expression tag)` pairs, in `CLICK_REGIONS` order.
     pub tags: &'static [(&'static str, &'static str)],
     /// Expansion mode.
@@ -99,50 +101,50 @@ const SURPRISED: [(&str, &str); 7] = [
 pub const PRESETS: [Preset; 7] = [
     Preset {
         name: "auto",
-        label_zh: "自动选择",
-        description_zh: "系统根据点击区域自动匹配合适的动作",
+        label_key: Key::PresetAuto,
+        description_key: Key::PresetAutoDescription,
         tags: &[],
         mode: PresetMode::Auto,
     },
     Preset {
         name: "genki",
-        label_zh: "元气开朗",
-        description_zh: "充满活力的笑脸与积极反应",
+        label_key: Key::PresetGenki,
+        description_key: Key::PresetGenkiDescription,
         tags: &GENKI,
         mode: PresetMode::Tags,
     },
     Preset {
         name: "tsundere",
-        label_zh: "傲娇",
-        description_zh: "嘴上不饶人但内心害羞的经典傲娇反应",
+        label_key: Key::PresetTsundere,
+        description_key: Key::PresetTsundereDescription,
         tags: &TSUNDERE,
         mode: PresetMode::Tags,
     },
     Preset {
         name: "shy",
-        label_zh: "害羞内向",
-        description_zh: "容易害羞、轻微社恐的可爱反应",
+        label_key: Key::PresetShy,
+        description_key: Key::PresetShyDescription,
         tags: &SHY,
         mode: PresetMode::Tags,
     },
     Preset {
         name: "cool",
-        label_zh: "冷静理智",
-        description_zh: "沉着冷静的认真反应",
+        label_key: Key::PresetCool,
+        description_key: Key::PresetCoolDescription,
         tags: &COOL,
         mode: PresetMode::Tags,
     },
     Preset {
         name: "surprised",
-        label_zh: "惊讶意外",
-        description_zh: "对各种触碰都感到惊讶的反应",
+        label_key: Key::PresetSurprised,
+        description_key: Key::PresetSurprisedDescription,
         tags: &SURPRISED,
         mode: PresetMode::Tags,
     },
     Preset {
         name: "random",
-        label_zh: "随机",
-        description_zh: "每次点击随机播放动作",
+        label_key: Key::PresetRandom,
+        description_key: Key::PresetRandomDescription,
         tags: &[],
         mode: PresetMode::Random,
     },
@@ -164,6 +166,16 @@ pub fn is_builtin_name(name: &str) -> bool {
 }
 
 impl Preset {
+    /// Display name in `lang`.
+    pub fn label(self, lang: Lang) -> &'static str {
+        lang.text(self.label_key)
+    }
+
+    /// One-line description in `lang`.
+    pub fn description(self, lang: Lang) -> &'static str {
+        lang.text(self.description_key)
+    }
+
     /// Tag for one region, if the preset defines it.
     pub fn tag_for(&self, region_key: &str) -> Option<&'static str> {
         self.tags
@@ -200,7 +212,9 @@ mod tests {
 
     #[test]
     fn lookup_and_builtin_names_behave() {
-        assert_eq!(preset("genki").unwrap().label_zh, "元气开朗");
+        assert_eq!(preset("genki").unwrap().label(Lang::ZhHans), "元气开朗");
+        assert_eq!(preset("genki").unwrap().label(Lang::En), "Cheerful");
+        assert!(!preset("genki").unwrap().description(Lang::Ja).is_empty());
         assert!(preset("nope").is_none());
         assert!(is_builtin_name("random"));
         assert!(!is_builtin_name("my_profile"));

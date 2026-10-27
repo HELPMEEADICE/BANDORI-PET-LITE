@@ -7,11 +7,12 @@ import {
     Hint,
     ActionButton,
 } from "components.slint";
+import { Texts } from "texts.slint";
 
 export struct PickerCard {
     key: string,
     display: string,
-    count: int,
+    count-label: string,
     picture: image,
     has-picture: bool,
     favorite: bool
@@ -66,6 +67,10 @@ export component IconButton inherits Rectangle {
 
 export component ModelPicker inherits Rectangle {
     in property <int> stage;
+    in property <Texts> t;
+    in property <string> title;
+    in property <string> subtitle;
+    in property <[string]> filter-labels;
     in property <[PickerRow]> rows;
     in property <[CostumeItem]> costumes;
     in property <string> band-label;
@@ -98,7 +103,7 @@ export component ModelPicker inherits Rectangle {
                 y: 0px;
                 width: parent.width - self.x;
                 height: parent.height;
-                text: root.stage == 2 ? root.character-label + " - 服装列表" : (root.showing-characters ? "选择角色" : "选择乐队");
+                text: root.title;
                 horizontal-alignment: center;
                 font-size: 28px;
                 font-weight: 700;
@@ -109,7 +114,7 @@ export component ModelPicker inherits Rectangle {
                 y: 3px;
                 width: root.stage == 2 ? 78px : 106px;
                 height: 32px;
-                text: root.stage == 2 ? "←  返回" : "←  返回乐队";
+                text: root.stage == 2 ? root.t.picker-back : root.t.picker-back-band;
                 clicked => { root.back(); }
             }
         }
@@ -119,12 +124,12 @@ export component ModelPicker inherits Rectangle {
             font-size: 20px;
             font-weight: 700;
             horizontal-alignment: root.stage == 2 ? left : center;
-            text: root.stage == 2 ? "请为 " + root.character-label + " 选择一套服装" : (root.showing-characters ? (root.band-label == "" ? "请选择角色" : "请选择 " + root.band-label + " 中的角色") : "请先选择乐队，再选择角色");
+            text: root.subtitle;
         }
 
         if root.stage == 2: Body {
             height: 20px;
-            text: "点击服装右侧的预览按钮可以固定/关闭预览；按住 Shift 悬停可临时预览。";
+            text: root.t.picker-preview-hint;
             font-size: 14px;
         }
         HorizontalLayout {
@@ -132,19 +137,19 @@ export component ModelPicker inherits Rectangle {
             spacing: 8px;
             if root.stage != 2: LineEdit {
                 text <=> root.search;
-                placeholder-text: "搜索角色 / 乐队 / key";
+                placeholder-text: root.t.picker-search-placeholder;
                 horizontal-stretch: 1;
                 edited => { root.refresh(); }
             }
             if root.stage == 2: LineEdit {
                 text <=> root.costume-search;
-                placeholder-text: "搜索服装 / id";
+                placeholder-text: root.t.picker-costume-search-placeholder;
                 horizontal-stretch: 1;
                 edited => { root.refresh(); }
             }
             ComboBox {
                 width: 140px;
-                model: ["全部", "最近使用", "收藏"];
+                model: root.filter-labels;
                 current-index: root.stage == 2 ? root.costume-filter : root.character-filter;
                 selected(value) => {
                     if root.stage == 2 { root.costume-filter = self.current-index; }
@@ -155,7 +160,7 @@ export component ModelPicker inherits Rectangle {
 
             if root.stage != 2: ActionButton {
                 width: 148px;
-                text: "＋  导入自定义模型";
+                text: root.t.picker-import-model-button;
                 clicked => { root.import-model(); }
             }
         }
@@ -195,7 +200,7 @@ export component ModelPicker inherits Rectangle {
                             }
 
                             Hint {
-                                text: card.count + "名角色";
+                                text: card.count-label;
                                 color: Colors.dark ? #999999 : #888888;
                                 height: 20px;
                             }
@@ -230,7 +235,7 @@ export component ModelPicker inherits Rectangle {
                                 if !card.has-picture: Hint {
                                     width: parent.width;
                                     height: parent.height;
-                                    text: "暂无立绘";
+                                    text: root.t.picker-no-portrait;
                                     horizontal-alignment: center;
                                 }
                             }
@@ -242,7 +247,7 @@ export component ModelPicker inherits Rectangle {
                             }
 
                             Hint {
-                                text: card.count + "套服装";
+                                text: card.count-label;
                                 color: Colors.dark ? #999999 : #888888;
                                 height: 22px;
                             }
@@ -275,7 +280,7 @@ export component ModelPicker inherits Rectangle {
                             y: 34px;
                             icon: @image-url("icons/heart.svg");
                             checked: card.favorite;
-                            label: "收藏角色 " + card.display;
+                            label: root.t.picker-favorite-character + card.display;
                             clicked => { root.favorite-character(card.key); }
                         }
                     }
@@ -283,7 +288,7 @@ export component ModelPicker inherits Rectangle {
             }
         }
         if root.stage != 2 && root.rows.length == 0: Hint {
-            text: "未找到角色，请检查模型目录或搜索条件。";
+            text: root.t.picker-no-characters;
             horizontal-alignment: center;
         }
         if root.stage == 2: AnimatedContent {
@@ -311,7 +316,7 @@ export component ModelPicker inherits Rectangle {
                         }
 
                         accessible-role: button;
-                        accessible-label: "选择服装 " + costume.display;
+                        accessible-label: root.t.picker-choose-costume + costume.display;
                         accessible-action-default => { root.choose-costume(costume.id); }
                         costume-focus := FocusScope {
                             key-pressed(event) => {
@@ -331,7 +336,7 @@ export component ModelPicker inherits Rectangle {
                             x: parent.width - 74px;
                             y: 6px;
                             icon: @image-url("icons/eye.svg");
-                            label: "预览服装 " + costume.display;
+                            label: root.t.picker-preview-costume + costume.display;
                             checked: root.preview-costume == costume.id;
                             clicked => { root.preview(costume.id); }
                         }
@@ -340,7 +345,7 @@ export component ModelPicker inherits Rectangle {
                             x: parent.width - 38px;
                             y: 6px;
                             icon: @image-url("icons/heart.svg");
-                            label: "收藏服装 " + costume.display;
+                            label: root.t.picker-favorite-costume + costume.display;
                             checked: costume.favorite;
                             clicked => { root.favorite-costume(costume.id); }
                         }
@@ -349,7 +354,7 @@ export component ModelPicker inherits Rectangle {
             }
         }
         if root.stage == 2 && root.costumes.length == 0: Hint {
-            text: "没有符合条件的服装";
+            text: root.t.picker-no-costumes;
             horizontal-alignment: center;
         }
     }

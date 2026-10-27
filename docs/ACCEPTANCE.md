@@ -37,13 +37,21 @@
 
 1. **`WM_NCHITTEST → HTTRANSPARENT` 安全网未做**：它只支持同线程窗口间转发，桌宠的跨进程穿透由 `WS_EX_LAYERED | WS_EX_TRANSPARENT` 控制，径向菜单用 `SetWindowRgn` 排除按钮以外的区域。窗口使用 `SetWindowSubclass` 保留必要样式并处理 `WM_MOUSEACTIVATE`，其余消息交回 winit。
 2. **渲染在主线程**：规格建议 main/render/io 三线程；实现是「事件循环里 `WaitUntil(1/fps)` 节流 + 同线程渲染」，命中是 CPU 计算不阻塞 GPU 提交，实测 60fps 稳定。要拆线程时 `FrameSnapshot` 已经是不可变快照，接口不用改。
-3. **像素模式、i18n 完整化、点击动作配置的导入/导出 UI** 未做（规格标明像素模式 v0 不做 UI；i18n 目前是中/英两套硬编码字符串）。
+3. **像素模式、点击动作配置的导入/导出 UI** 未做（规格标明像素模式 v0 不做 UI）。
 4. **`live2d_active_profile`（自定义命名的 profile 保存/选择）** 只支持内置 7 套预设展开；自定义 profile 的数据结构（`click_motion_profiles`）已进配置契约，UI 未提供保存入口。
+
+## 界面语言（2026-10-27 完成）
+
+- 四语五种变体：简体中文 `zh_CN`、繁體中文 `zh_TW`、日本語 `ja_JP`、한국어 `ko_KR`、English `en_US`；下拉框切换后立即生效，无需重启，选择写入 `config.json` 的 `language`。
+- 覆盖范围：设置窗口全部页面、模型选择器、导入对话框、右键径向菜单、托盘菜单、下载进度与错误提示、「关于」页、桌宠进程上报的加载错误。
+- 实现：`crates/pet-i18n` 存放 `Lang`、`Key` 目录与五种语言表；`pet-ui/ui/texts.slint` 的 `Texts` 结构体由 `pet-ui/src/texts.rs` 填充，需要拼接计数的文案（如「3 套服装」）在 Rust 侧按语言的复数规则生成；`ToggleRow` 的 On/Off 通过属性传入。
+- 验收：`texts::tests::every_language_renders_and_exposes_its_labels` 用软件渲染器逐个语言渲染三个页面，检查窗口标题、导航和开关文案来自对应语言表；截图可用 `BANDORI_UI_QA_DIR` 输出。`pet-i18n` 的测试保证 214 个 `Key` 全部有译文、占位符一一对应、日/韩不是英文原文、繁體不是简体复制。
+- 角色名、服装名、乐队名来自模型目录的 `band.json` / `outfit.json`，属于模型数据，不随界面语言变化。
 
 ## 复现方式
 
 ```powershell
-cargo test --workspace                                  # 144 个测试（另有 6 个 ignored）
+cargo test --workspace                                  # 184 个测试（另有 8 个 ignored）
 pwsh -File scripts/run-dev.ps1 -ModelsFrom <你的 models 目录>
 $env:BANDORI_PET_ROOT = "$PWD\run"; $env:RUST_LOG = "info,pet_app=debug"
 .\run\bandori-pet.exe

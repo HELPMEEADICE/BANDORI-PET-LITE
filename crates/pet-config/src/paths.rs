@@ -193,17 +193,36 @@ fn local_app_data() -> Option<PathBuf> {
 }
 
 /// Rows shown on the About page (`label`, `value`).
-pub fn about_lines(paths: &Paths, config: &crate::Config) -> Vec<(String, String)> {
+pub fn about_lines(
+    paths: &Paths,
+    config: &crate::Config,
+    lang: pet_i18n::Lang,
+) -> Vec<(String, String)> {
     vec![
-        ("版本".to_owned(), env!("CARGO_PKG_VERSION").to_owned()),
-        ("模型目录".to_owned(), paths.models().display().to_string()),
-        ("缓存目录".to_owned(), paths.cache().display().to_string()),
-        ("日志目录".to_owned(), paths.logs().display().to_string()),
         (
-            "当前角色".to_owned(),
+            lang.text(pet_i18n::Key::AboutVersion).to_owned(),
+            env!("CARGO_PKG_VERSION").to_owned(),
+        ),
+        (
+            lang.text(pet_i18n::Key::AboutModelsDirectory).to_owned(),
+            paths.models().display().to_string(),
+        ),
+        (
+            lang.text(pet_i18n::Key::AboutCacheDirectory).to_owned(),
+            paths.cache().display().to_string(),
+        ),
+        (
+            lang.text(pet_i18n::Key::AboutLogsDirectory).to_owned(),
+            paths.logs().display().to_string(),
+        ),
+        (
+            lang.text(pet_i18n::Key::AboutCurrentCharacter).to_owned(),
             format!("{} / {}", config.character, config.costume),
         ),
-        ("配置文件".to_owned(), paths.config().display().to_string()),
+        (
+            lang.text(pet_i18n::Key::AboutConfigFile).to_owned(),
+            paths.config().display().to_string(),
+        ),
     ]
 }
 

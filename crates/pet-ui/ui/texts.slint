@@ -1,0 +1,130 @@
+// Static UI copy. `pet-ui` fills this struct from the `pet-i18n` catalogue, so
+// every label that is not built at runtime lives here instead of in a literal.
+// Strings that need a count, a file name or a model name are composed in Rust
+// and arrive through regular properties.
+
+export struct Texts {
+    // Window chrome and navigation.
+    settings-title: string,
+    menu-title: string,
+    nav-heading: string,
+    nav-characters: string,
+    nav-behavior: string,
+    nav-display: string,
+    nav-downloads: string,
+    nav-about: string,
+
+    // Sidebar options.
+    settings-heading: string,
+    toggle-topmost: string,
+    toggle-obs: string,
+    toggle-hide-model: string,
+    toggle-autostart: string,
+    theme-label: string,
+    language-label: string,
+    apply-button: string,
+    toggle-on: string,
+    toggle-off: string,
+    role-select-accessible: string,
+    role-remove-accessible: string,
+    roles-empty: string,
+    add-model-button: string,
+    roles-hint: string,
+    status-connecting: string,
+
+    // Model page.
+    model-details-title: string,
+    model-details-subtitle: string,
+    no-portrait: string,
+    pick-character-to-start: string,
+    costume-prefix: string,
+    no-active-model: string,
+    band-prefix: string,
+    switch-model-button: string,
+    switch-model-accessible: string,
+    pick-new-hint: string,
+    click-feedback-heading: string,
+    click-feedback-hint: string,
+    configure-click-button: string,
+    never-selected: string,
+
+    // Display page.
+    display-hint: string,
+    display-section: string,
+    quality-label: string,
+    quality-hint: string,
+    fps-label: string,
+    scale-label: string,
+    opacity-label: string,
+    vsync-label: string,
+    gpu-label: string,
+    restart-hint: string,
+    position-section: string,
+    move-together-label: string,
+    reset-positions-button: string,
+
+    // Behavior page.
+    behavior-hint: string,
+    behavior-section: string,
+    drag-locked-label: string,
+    drag-locked-hint: string,
+    head-tracking-label: string,
+    mutual-gaze-label: string,
+    idle-actions-label: string,
+    random-actions-label: string,
+    emotion-label: string,
+    click-hint: string,
+    preset-label: string,
+    apply-preset-button: string,
+    region-column: string,
+    motion-column: string,
+    expression-column: string,
+
+    // Downloads page.
+    downloads-hint: string,
+    no-models-heading: string,
+    no-models-hint: string,
+    download-search-placeholder: string,
+    download-missing-button: string,
+    update-installed-button: string,
+    refresh-button: string,
+    open-folder-button: string,
+    cancel-download-button: string,
+    choose-costume-button: string,
+    processing: string,
+    download-source: string,
+    download-notice: string,
+
+    // About page.
+    open-model-folder-button: string,
+    about-license: string,
+
+    // Import dialog.
+    import-title: string,
+    import-hint: string,
+    import-placeholder: string,
+    import-cancel-button: string,
+    import-button: string,
+    import-busy: string,
+
+    // Model picker.
+    picker-choose-character: string,
+    picker-choose-band: string,
+    picker-back: string,
+    picker-back-band: string,
+    picker-import-model-button: string,
+    picker-preview-hint: string,
+    picker-search-placeholder: string,
+    picker-costume-search-placeholder: string,
+    picker-no-portrait: string,
+    picker-no-characters: string,
+    picker-no-costumes: string,
+    picker-favorite-character: string,
+    picker-favorite-costume: string,
+    picker-choose-costume: string,
+    picker-preview-costume: string,
+
+    // Radial menu.
+    radial-lock: string,
+    radial-unlock: string,
+}

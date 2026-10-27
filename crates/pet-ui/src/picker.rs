@@ -7,15 +7,17 @@ use std::sync::mpsc::{channel, Receiver, Sender as ChannelSender};
 
 use pet_assets::catalog::Catalog;
 use pet_config::{Config, ModelPickerState, Paths, SettingsPatch};
+use pet_i18n::{Key, Lang};
 use pet_ipc::Message;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
+use super::texts;
 use super::{CostumeItem, PickerCard, PickerRow, Sender, SettingsWindow};
 
 enum Request {
     Portrait(String, String),
     Preview(String, String),
-    Import(PathBuf),
+    Import(PathBuf, Lang),
 }
 enum ResultItem {
     Portrait(String, Option<PathBuf>),
@@ -75,8 +77,8 @@ impl Picker {
                         Request::Preview(key, path) => {
                             ResultItem::Preview(key, super::preview::render(&worker_paths, &path))
                         }
-                        Request::Import(path) => {
-                            ResultItem::Import(import_archive(&worker_paths, &path))
+                        Request::Import(path, lang) => {
+                            ResultItem::Import(import_archive(&worker_paths, &path, lang))
                         }
                     };
                     if results.send(result).is_err() {
@@ -209,9 +211,10 @@ impl Picker {
             if let Some(window) = weak.upgrade() {
                 window.set_importing(true);
                 window.set_import_error("".into());
-                let _ = picker.requests.send(Request::Import(PathBuf::from(
-                    path.trim().trim_matches('"'),
-                )));
+                let _ = picker.requests.send(Request::Import(
+                    PathBuf::from(path.trim().trim_matches('"')),
+                    texts::lang_of(&window),
+                ));
             }
         });
     }
@@ -290,7 +293,7 @@ impl Picker {
         window.set_preview_costume(id.into());
         window.set_preview_label(costume.display.clone().into());
         window.set_preview_image(slint::Image::default());
-        window.set_preview_status("正在生成服装预览…".into());
+        window.set_preview_status(texts::lang_of(window).text(Key::PreviewGenerating).into());
         window.set_preview_visible(true);
         let _ = self.requests.send(Request::Preview(
             format!("{character}:{id}"),
@@ -350,11 +353,15 @@ impl Picker {
                         }) {
                             Ok(image) => {
                                 window.set_preview_image(image);
-                                window.set_preview_status("服装静态预览".into());
+                                window.set_preview_status(
+                                    texts::lang_of(window).text(Key::PreviewStatic).into(),
+                                );
                             }
-                            Err(error) => {
-                                window.set_preview_status(format!("预览失败：{error}").into())
-                            }
+                            Err(error) => window.set_preview_status(
+                                texts::lang_of(window)
+                                    .format(Key::PreviewFailed, &[&error])
+                                    .into(),
+                            ),
                         }
                     }
                 }
@@ -364,7 +371,9 @@ impl Picker {
                         Ok(catalog) => {
                             *self.catalog.borrow_mut() = catalog;
                             window.set_import_visible(false);
-                            window.set_status("模型已导入".into());
+                            window.set_status(
+                                texts::lang_of(window).text(Key::StatusModelImported).into(),
+                            );
                             refresh = true;
                         }
                         Err(error) => window.set_import_error(error.into()),
@@ -380,6 +389,7 @@ impl Picker {
     pub fn refresh(&self, window: &SettingsWindow) {
         let catalog = self.catalog.borrow();
         let state = self.state.borrow();
+        let lang = texts::lang_of(window);
         let stage = window.get_picker_stage();
         let band = window.get_selected_band();
         let query = window.get_search().trim().to_lowercase();
@@ -395,6 +405,17 @@ impl Picker {
                 .unwrap_or("")
                 .into(),
         );
+        let character_label = window.get_selected_character_label();
+        let band_label = window.get_selected_band_label();
+        let (title, subtitle) = heading(
+            lang,
+            stage,
+            show_characters,
+            character_label.as_str(),
+            band_label.as_str(),
+        );
+        window.set_picker_title(title.into());
+        window.set_picker_subtitle(subtitle.into());
         if stage == 2 {
             let character = window.get_selected_character();
             let query = window.get_costume_search().trim().to_lowercase();
@@ -474,7 +495,7 @@ impl Picker {
                     PickerCard {
                         key: character.key.clone().into(),
                         display: character.display.clone().into(),
-                        count: character.costumes.len() as i32,
+                        count_label: lang.character_count(character.costumes.len()).into(),
                         has_picture: picture.is_some(),
                         picture: picture.unwrap_or_default(),
                         favorite: state.favorite_characters.contains(&character.key),
@@ -488,7 +509,7 @@ impl Picker {
                 .map(|band| PickerCard {
                     key: band.id.clone().into(),
                     display: band.display.clone().into(),
-                    count: band.characters.len() as i32,
+                    count_label: lang.character_count(band.characters.len()).into(),
                     picture: band_logo(&self.paths, &band.id, &band.logo),
                     has_picture: !band.logo.is_empty(),
                     favorite: false,
@@ -554,32 +575,62 @@ fn band_logo(paths: &Paths, id: &str, logo: &str) -> slint::Image {
     ))
 }
 
-fn import_archive(paths: &Paths, source: &Path) -> Result<Catalog, String> {
+/// Title and subtitle above the picker grid for the current stage.
+fn heading(
+    lang: Lang,
+    stage: i32,
+    show_characters: bool,
+    character: &str,
+    band: &str,
+) -> (String, String) {
+    if stage == 2 {
+        (
+            format!("{character} - {}", lang.text(Key::PickerCostumeList)),
+            lang.format(Key::PickerChooseCostumeFor, &[character]),
+        )
+    } else if show_characters {
+        let subtitle = if band.is_empty() {
+            lang.text(Key::PickerPickCharacter).to_owned()
+        } else {
+            lang.format(Key::PickerPickCharacterInBand, &[band])
+        };
+        (lang.text(Key::PickerChooseCharacter).to_owned(), subtitle)
+    } else {
+        (
+            lang.text(Key::PickerChooseBand).to_owned(),
+            lang.text(Key::PickerBandFirst).to_owned(),
+        )
+    }
+}
+
+fn import_archive(paths: &Paths, source: &Path, lang: Lang) -> Result<Catalog, String> {
     if !source
         .extension()
         .and_then(|value| value.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("zst"))
     {
-        return Err("请选择 .zst 模型归档".into());
+        return Err(lang.text(Key::ImportNeedsArchive).to_owned());
     }
     let scan = pet_assets::index::scan_archive(source)
-        .map_err(|error| format!("无法读取模型：{error}"))?;
+        .map_err(|error| lang.format(Key::ImportUnreadable, &[&error.to_string()]))?;
     if scan.costumes.is_empty() {
-        return Err("归档内未找到模型文件".into());
+        return Err(lang.text(Key::ImportNoModelFile).to_owned());
     }
     std::fs::create_dir_all(paths.models()).map_err(|error| error.to_string())?;
-    let destination = paths
-        .models()
-        .join(source.file_name().ok_or("路径缺少文件名")?);
+    let destination = paths.models().join(
+        source
+            .file_name()
+            .ok_or_else(|| lang.text(Key::ImportMissingFileName).to_owned())?,
+    );
     if destination.exists() {
-        return Err("同名模型已经存在，请使用其他文件名".into());
+        return Err(lang.text(Key::ImportDuplicateName).to_owned());
     }
     let temporary = destination.with_extension("zst.importing");
     let mut output = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&temporary)
-        .map_err(|error| format!("无法创建导入文件：{error}"))?;
+        .map_err(|error| lang.format(Key::ImportCreateFailed, &[&error.to_string()]))?;
     let copy = (|| {
         std::io::copy(&mut std::fs::File::open(source)?, &mut output)?;
         output.sync_all()?;
@@ -588,7 +639,7 @@ fn import_archive(paths: &Paths, source: &Path) -> Result<Catalog, String> {
     })();
     if let Err(error) = copy {
         let _ = std::fs::remove_file(&temporary);
-        return Err(format!("导入失败：{error}"));
+        return Err(lang.format(Key::ImportFailed, &[&error.to_string()]));
     }
     Ok(Catalog::build(
         &paths.assets(),
@@ -632,7 +683,7 @@ mod tests {
     #[test]
     fn downloaded_character_opens_costumes_and_returns_to_its_own_band() {
         i_slint_backend_testing::init_no_event_loop();
-        let window = SettingsWindow::new().unwrap();
+        let window = super::super::tests::test_window();
         let picker = Picker::new(
             Rc::new(RefCell::new(fixture_catalog())),
             &Paths::with_root("missing-test-root"),

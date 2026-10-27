@@ -12,6 +12,7 @@ path = "src/bin/bandori_ui.rs"
 
 
 [dependencies]
+pet-i18n.workspace = true
 pet-config.workspace = true
 pet-assets.workspace = true
 pet-live2d.workspace = true

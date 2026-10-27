@@ -9,9 +9,11 @@ use pet_assets::catalog::{model_packages, Catalog, ModelPackage};
 use pet_assets::download::{DownloadError, DownloadProgress, PackageDownloader};
 use pet_assets::{index, ModelIndex};
 use pet_config::Paths;
+use pet_i18n::{Key, Lang};
 use pet_ipc::Message;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
+use super::texts;
 use super::{picker::Picker, DownloadRow, Sender, SettingsWindow};
 
 enum Request {
@@ -23,7 +25,7 @@ enum Event {
     Catalog(ModelIndex, Catalog),
     Progress(String, Option<DownloadProgress>),
     Installed(String, ModelIndex, Catalog),
-    Failed(String, String),
+    Failed(String, DownloadError),
     Finished {
         done: usize,
         failed: usize,
@@ -31,12 +33,70 @@ enum Event {
     },
 }
 
+/// Per-package transfer state. Keeping it structured means a language switch
+/// can re-render every row without replaying the download.
+enum Detail {
+    Connecting,
+    Downloading {
+        downloaded: u64,
+        total: Option<u64>,
+        speed: f64,
+    },
+    Verifying,
+    Installed,
+    Failed(DownloadError),
+}
+
+/// One row's live progress plus its detail text source.
+struct Status {
+    detail: Detail,
+    percent: f32,
+}
+
+impl Detail {
+    /// Localized detail text of a download row.
+    fn text(&self, lang: Lang) -> String {
+        match self {
+            Detail::Connecting => lang.text(Key::DownloadConnecting).to_owned(),
+            Detail::Verifying => lang.text(Key::DownloadVerifying).to_owned(),
+            Detail::Downloading {
+                downloaded,
+                total,
+                speed,
+            } => format!(
+                "{} / {} · {}/s",
+                size(*downloaded),
+                total
+                    .map(size)
+                    .unwrap_or_else(|| lang.text(Key::DownloadUnknownSize).to_owned()),
+                size(*speed as u64)
+            ),
+            Detail::Installed => lang.text(Key::DownloadInstalledDetail).to_owned(),
+            Detail::Failed(error) => failure_text(lang, error),
+        }
+    }
+}
+
+/// Failure text with the retry hint; cancellation keeps the old model instead.
+fn failure_text(lang: Lang, error: &DownloadError) -> String {
+    match error {
+        DownloadError::Cancelled => lang.text(Key::DownloadCancelledDetail).to_owned(),
+        DownloadError::InvalidKey(key) => lang.format(Key::DownloadErrorInvalidKey, &[key]),
+        DownloadError::Http(error) => lang.format(Key::DownloadErrorNetwork, &[&error.to_string()]),
+        DownloadError::Io(error) => lang.format(Key::DownloadErrorFile, &[&error.to_string()]),
+        DownloadError::InvalidArchive(issue) => {
+            lang.format(Key::DownloadErrorArchive, &[issue.text(lang)])
+        }
+        DownloadError::Setup(detail) => lang.format(Key::DownloadErrorNetwork, &[detail]),
+    }
+}
+
 pub(super) struct Downloads {
     packages: Vec<ModelPackage>,
     index: RefCell<ModelIndex>,
     catalog: Rc<RefCell<Catalog>>,
     picker: Rc<Picker>,
-    status: RefCell<HashMap<String, (String, f32)>>,
+    status: RefCell<HashMap<String, Status>>,
     active: RefCell<String>,
     busy: Cell<bool>,
     cancel: Arc<AtomicBool>,
@@ -94,7 +154,10 @@ impl Downloads {
                                     ),
                                     Err(error) => {
                                         failed += 1;
-                                        let _ = events.send(Event::Failed(key, error.to_string()));
+                                        let _ = events.send(Event::Failed(
+                                            key,
+                                            DownloadError::Setup(error.to_string()),
+                                        ));
                                         continue;
                                     }
                                 };
@@ -111,18 +174,13 @@ impl Downloads {
                                         }
                                     }
                                     Err(DownloadError::Cancelled) => {
-                                        let _ = events.send(Event::Failed(
-                                            key,
-                                            "已取消，原有模型已保留".into(),
-                                        ));
+                                        let _ = events
+                                            .send(Event::Failed(key, DownloadError::Cancelled));
                                         break;
                                     }
                                     Err(error) => {
                                         failed += 1;
-                                        let _ = events.send(Event::Failed(
-                                            key,
-                                            format!("{error}；可点击重试"),
-                                        ));
+                                        let _ = events.send(Event::Failed(key, error));
                                     }
                                 }
                             }
@@ -163,7 +221,9 @@ impl Downloads {
                 if !this.busy.replace(true) {
                     window.set_download_busy(true);
                     window.set_download_scanning(true);
-                    window.set_download_notice("正在扫描本地模型…".into());
+                    window.set_download_notice(
+                        texts::lang_of(&window).text(Key::DownloadScanning).into(),
+                    );
                     let _ = this.requests.send(Request::Scan);
                 }
             }
@@ -211,7 +271,9 @@ impl Downloads {
         window.on_cancel_downloads(move || {
             this.cancel.store(true, Ordering::Relaxed);
             if let Some(window) = weak.upgrade() {
-                window.set_download_notice("正在取消下载…".into());
+                window.set_download_notice(
+                    texts::lang_of(&window).text(Key::DownloadCancelling).into(),
+                );
             }
         });
         let weak = window.as_weak();
@@ -229,19 +291,24 @@ impl Downloads {
         if self.busy.get() {
             return;
         }
+        let lang = texts::lang_of(window);
         if keys.is_empty() {
-            window.set_download_notice("没有需要处理的模型包".into());
+            window.set_download_notice(lang.text(Key::DownloadNothingToDo).into());
             return;
         }
         self.busy.set(true);
         self.cancel.store(false, Ordering::Relaxed);
         window.set_download_busy(true);
-        window.set_download_notice(format!("准备下载 {} 个模型包…", keys.len()).into());
+        window.set_download_notice(
+            lang.format(Key::DownloadPreparing, &[&lang.package_count(keys.len())])
+                .into(),
+        );
         let _ = self.requests.send(Request::Download(keys));
     }
 
     pub fn poll(&self, window: &SettingsWindow) {
         let mut refresh = false;
+        let lang = texts::lang_of(window);
         while let Ok(event) = self.events.try_recv() {
             refresh = true;
             match event {
@@ -252,24 +319,19 @@ impl Downloads {
                     self.busy.set(false);
                     window.set_download_busy(false);
                     window.set_download_scanning(false);
-                    window.set_download_notice("本地模型已刷新".into());
+                    window.set_download_notice(lang.text(Key::DownloadRefreshed).into());
                     (self.send)(&Message::ModelsChanged {
                         characters: Vec::new(),
                     });
                 }
                 Event::Progress(key, progress) => {
                     *self.active.borrow_mut() = key.clone();
-                    let (text, percent) = match progress {
-                        Some(p) => (
-                            if p.bytes_per_second == 0.0 {
-                                "下载完成，正在校验模型包…".into()
-                            } else {
-                                format!(
-                                    "{} / {} · {}/s",
-                                    size(p.downloaded),
-                                    p.total.map(size).unwrap_or_else(|| "未知大小".into()),
-                                    size(p.bytes_per_second as u64)
-                                )
+                    let (detail, percent) = match progress {
+                        Some(p) if p.bytes_per_second > 0.0 => (
+                            Detail::Downloading {
+                                downloaded: p.downloaded,
+                                total: p.total,
+                                speed: p.bytes_per_second,
                             },
                             p.total
                                 .map(|total| {
@@ -277,17 +339,27 @@ impl Downloads {
                                 })
                                 .unwrap_or(-1.),
                         ),
-                        None => ("正在连接下载源…".into(), -1.),
+                        Some(_) => (Detail::Verifying, 99.),
+                        None => (Detail::Connecting, -1.),
                     };
-                    window.set_download_notice(format!("{key}：{text}").into());
-                    self.status.borrow_mut().insert(key, (text, percent));
+                    window.set_download_notice(
+                        lang.format(Key::DownloadStatusLine, &[&key, &detail.text(lang)])
+                            .into(),
+                    );
+                    self.status
+                        .borrow_mut()
+                        .insert(key, Status { detail, percent });
                 }
                 Event::Installed(key, index, catalog) => {
                     *self.index.borrow_mut() = index;
                     *self.catalog.borrow_mut() = catalog;
-                    self.status
-                        .borrow_mut()
-                        .insert(key.clone(), ("已完成，可选择服装或再次更新".into(), 100.));
+                    self.status.borrow_mut().insert(
+                        key.clone(),
+                        Status {
+                            detail: Detail::Installed,
+                            percent: 100.,
+                        },
+                    );
                     self.active.borrow_mut().clear();
                     self.picker.catalog_changed(window);
                     (self.send)(&Message::ModelsChanged {
@@ -295,7 +367,13 @@ impl Downloads {
                     });
                 }
                 Event::Failed(key, error) => {
-                    self.status.borrow_mut().insert(key, (error, 0.));
+                    self.status.borrow_mut().insert(
+                        key,
+                        Status {
+                            detail: Detail::Failed(error),
+                            percent: 0.,
+                        },
+                    );
                     self.active.borrow_mut().clear();
                 }
                 Event::Finished {
@@ -306,13 +384,17 @@ impl Downloads {
                     self.busy.set(false);
                     window.set_download_busy(false);
                     window.set_download_notice(
-                        format!(
-                            "{}：成功 {done} 个，失败 {failed} 个",
-                            if cancelled {
-                                "下载已取消"
-                            } else {
-                                "下载结束"
-                            }
+                        lang.format(
+                            Key::DownloadSummary,
+                            &[
+                                if cancelled {
+                                    lang.text(Key::DownloadCancelled)
+                                } else {
+                                    lang.text(Key::DownloadFinished)
+                                },
+                                &done.to_string(),
+                                &failed.to_string(),
+                            ],
                         )
                         .into(),
                     );
@@ -324,25 +406,38 @@ impl Downloads {
         }
     }
 
+    /// Detail text for one row, in the language of `lang`.
+    fn detail_text(&self, lang: Lang, key: &str) -> Option<(String, f32)> {
+        let status = self.status.borrow();
+        let status = status.get(key)?;
+        Some((status.detail.text(lang), status.percent))
+    }
+
     pub fn refresh(&self, window: &SettingsWindow) {
+        let lang = texts::lang_of(window);
         let index = self.index.borrow();
         let installed = index.characters();
         window.set_no_installed_models(installed.is_empty());
         window.set_download_summary(
-            format!(
-                "已安装 {} 个角色 · 可下载 {} 个角色",
-                installed.len(),
-                self.packages.len()
+            lang.format(
+                Key::DownloadInstalledSummary,
+                &[
+                    &installed.len().to_string(),
+                    &self.packages.len().to_string(),
+                ],
             )
             .into(),
         );
+        if window.get_download_notice().is_empty() {
+            window.set_download_notice(lang.text(Key::DownloadNotice).into());
+        }
         let mut packages = self.packages.clone();
         for key in &installed {
             if !packages.iter().any(|package| &package.key == key) {
                 packages.push(ModelPackage {
                     key: key.clone(),
                     display: key.clone(),
-                    band_display: "自定义角色".into(),
+                    band_display: lang.text(Key::DownloadCustomCharacter).to_owned(),
                 });
             }
         }
@@ -362,26 +457,21 @@ impl Downloads {
             let entry = index.archives.get(&format!("models/{}.zst", package.key));
             let costumes = index.costumes_of(&package.key).len();
             let available = self.packages.iter().any(|remote| remote.key == package.key);
-            let detail = self
-                .status
-                .borrow()
-                .get(&package.key)
-                .cloned()
-                .unwrap_or_else(|| {
-                    (
-                        if costumes > 0 {
-                            format!(
-                                "已安装 · {costumes} 套服装 · {}",
-                                size(entry.map(|entry| entry.size).unwrap_or(0))
-                            )
-                        } else if entry.is_some() {
-                            "模型包无法读取，请重新下载".into()
-                        } else {
-                            "尚未下载".into()
-                        },
-                        0.,
-                    )
-                });
+            let detail = self.detail_text(lang, &package.key).unwrap_or_else(|| {
+                (
+                    if costumes > 0 {
+                        lang.installed_row(
+                            costumes,
+                            &size(entry.map(|entry| entry.size).unwrap_or(0)),
+                        )
+                    } else if entry.is_some() {
+                        lang.text(Key::DownloadBrokenRow).to_owned()
+                    } else {
+                        lang.text(Key::DownloadNotDownloadedRow).to_owned()
+                    },
+                    0.,
+                )
+            });
             let group_start = previous_band != package.band_display;
             previous_band = package.band_display.clone();
             rows.push(DownloadRow {
@@ -392,9 +482,9 @@ impl Downloads {
                 installed: costumes > 0,
                 available,
                 action: if entry.is_some() {
-                    "更新 / 重试"
+                    lang.text(Key::DownloadActionUpdate)
                 } else {
-                    "下载"
+                    lang.text(Key::DownloadActionDownload)
                 }
                 .into(),
                 detail: detail.0.into(),
@@ -439,7 +529,7 @@ mod tests {
         .unwrap();
         let root = tempfile::tempdir().unwrap();
         let paths = Paths::with_root(root.path());
-        let window = SettingsWindow::new().unwrap();
+        let window = super::super::tests::test_window();
         window.set_page(4);
         window.set_first_run(true);
         let catalog = Rc::new(RefCell::new(Catalog::default()));
