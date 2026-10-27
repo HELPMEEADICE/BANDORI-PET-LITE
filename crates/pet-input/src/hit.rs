@@ -24,26 +24,112 @@ use crate::region::Bounds;
 pub struct AlphaTexture {
     width: u32,
     height: u32,
-    alpha: Vec<u8>,
+    alpha: AlphaStorage,
+}
+
+const ALPHA_TILE: usize = 16;
+const MIXED_TILE: u32 = 1 << 31;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AlphaStorage {
+    Dense(Box<[u8]>),
+    // Uniform tiles store their exact alpha in the table. Mixed tiles point to
+    // 256 original bytes. Sampling needs no decompression or temporary buffer.
+    Tiled { tiles: Box<[u32]>, mixed: Box<[u8]> },
 }
 
 impl AlphaTexture {
-    /// Copies every original alpha byte, without resampling or thresholding.
+    /// Preserves every original alpha byte, without resampling or thresholding.
     pub fn from_texture(texture: &DecodedTexture) -> Self {
         Self {
             width: texture.width(),
             height: texture.height(),
-            alpha: texture
-                .rgba()
-                .chunks_exact(4)
-                .map(|pixel| pixel[3])
-                .collect(),
+            alpha: AlphaStorage::from_texture(texture),
         }
     }
 
-    /// Bytes retained for hit testing (one byte per original pixel).
+    /// Heap bytes retained for hit testing, including the tile lookup table.
     pub fn byte_len(&self) -> usize {
-        self.alpha.len()
+        match &self.alpha {
+            AlphaStorage::Dense(bytes) => bytes.len(),
+            AlphaStorage::Tiled { tiles, mixed } => {
+                std::mem::size_of_val(tiles.as_ref()) + mixed.len()
+            }
+        }
+    }
+
+    fn alpha_at(&self, x: usize, y: usize) -> u8 {
+        match &self.alpha {
+            AlphaStorage::Dense(bytes) => bytes
+                .get(y * self.width as usize + x)
+                .copied()
+                .unwrap_or(255),
+            AlphaStorage::Tiled { tiles, mixed } => {
+                let columns = (self.width as usize).div_ceil(ALPHA_TILE);
+                let tile = tiles[(y / ALPHA_TILE) * columns + x / ALPHA_TILE];
+                if tile & MIXED_TILE == 0 {
+                    tile as u8
+                } else {
+                    mixed[(tile & !MIXED_TILE) as usize
+                        + (y % ALPHA_TILE) * ALPHA_TILE
+                        + x % ALPHA_TILE]
+                }
+            }
+        }
+    }
+}
+
+impl AlphaStorage {
+    fn from_texture(texture: &DecodedTexture) -> Self {
+        let rgba = texture.rgba();
+        let dense = || Self::Dense(rgba.chunks_exact(4).map(|pixel| pixel[3]).collect());
+        let width = texture.width() as usize;
+        let height = texture.height() as usize;
+        let pixels = width.saturating_mul(height);
+        let columns = width.div_ceil(ALPHA_TILE);
+        let tile_count = columns.saturating_mul(height.div_ceil(ALPHA_TILE));
+        let table_bytes = tile_count.saturating_mul(std::mem::size_of::<u32>());
+        // Retain the original fallback for empty/malformed inputs. No texture
+        // ever uses more storage than its dense alpha channel.
+        if pixels == 0
+            || pixels >= MIXED_TILE as usize
+            || pixels != rgba.len() / 4
+            || table_bytes >= pixels
+        {
+            return dense();
+        }
+        let mut tiles = Vec::with_capacity(tile_count);
+        let mut mixed = Vec::new();
+        for top in (0..height).step_by(ALPHA_TILE) {
+            for left in (0..width).step_by(ALPHA_TILE) {
+                let first = rgba[(top * width + left) * 4 + 3];
+                let bottom = (top + ALPHA_TILE).min(height);
+                let right = (left + ALPHA_TILE).min(width);
+                let uniform = (top..bottom)
+                    .all(|y| (left..right).all(|x| rgba[(y * width + x) * 4 + 3] == first));
+                if uniform {
+                    tiles.push(u32::from(first));
+                } else {
+                    if table_bytes + mixed.len() + ALPHA_TILE * ALPHA_TILE >= pixels {
+                        return dense();
+                    }
+                    tiles.push(MIXED_TILE | mixed.len() as u32);
+                    for y in top..top + ALPHA_TILE {
+                        for x in left..left + ALPHA_TILE {
+                            mixed.push(if y < bottom && x < right {
+                                rgba[(y * width + x) * 4 + 3]
+                            } else {
+                                first
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        Self::Tiled {
+            tiles: tiles.into_boxed_slice(),
+            mixed: mixed.into_boxed_slice(),
+        }
     }
 }
 
@@ -276,8 +362,7 @@ fn sample_alpha(texture: &AlphaTexture, uv: [f32; 2]) -> u8 {
     }
     let x = (uv[0].clamp(0.0, 1.0) * (width - 1) as f32).round() as u32;
     let y = (uv[1].clamp(0.0, 1.0) * (height - 1) as f32).round() as u32;
-    let index = (y * width + x) as usize;
-    texture.alpha.get(index).copied().unwrap_or(255)
+    texture.alpha_at(x as usize, y as usize)
 }
 
 /// Stability compensation for repeated hit tests.
@@ -389,7 +474,11 @@ mod tests {
         let source = DecodedTexture::new(16, 16, rgba);
         let texture = AlphaTexture::from_texture(&source);
         assert_eq!(texture.byte_len(), source.rgba().len() / 4);
-        assert_eq!(texture.alpha, (0..=255u8).collect::<Vec<_>>());
+        for y in 0..16 {
+            for x in 0..16 {
+                assert_eq!(texture.alpha_at(x, y), (y * 16 + x) as u8);
+            }
+        }
         // Cover pixel centers, edges, clamping and intermediate UVs using the
         // previous RGBA sampler as the reference.
         for y in -10..=110 {
@@ -403,6 +492,61 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn tiled_alpha_preserves_mixed_tiles_partial_edges_and_uniform_values() {
+        for (width, height) in [(1, 257), (15, 33), (16, 16), (17, 31), (65, 49)] {
+            let rgba: Vec<_> = (0..height)
+                .flat_map(|y| {
+                    (0..width).flat_map(move |x| {
+                        let alpha = if x / ALPHA_TILE == 1 && y / ALPHA_TILE == 1 {
+                            (x + y * width) as u8
+                        } else {
+                            (x / ALPHA_TILE + y / ALPHA_TILE * 37) as u8
+                        };
+                        [123, 45, 67, alpha]
+                    })
+                })
+                .collect();
+            let source = DecodedTexture::new(width as u32, height as u32, rgba);
+            let texture = AlphaTexture::from_texture(&source);
+            assert!(texture.byte_len() <= width * height);
+            assert!(matches!(texture.alpha, AlphaStorage::Tiled { .. }));
+            for y in 0..height {
+                for x in 0..width {
+                    assert_eq!(
+                        texture.alpha_at(x, y),
+                        source.rgba()[(y * width + x) * 4 + 3]
+                    );
+                }
+            }
+        }
+        for alpha in 0..=255u8 {
+            let texture =
+                AlphaTexture::from(DecodedTexture::new(32, 32, [1, 2, 3, alpha].repeat(1024)));
+            assert_eq!(texture.byte_len(), 4 * 4);
+            assert_eq!(texture.alpha_at(31, 31), alpha);
+        }
+    }
+
+    #[test]
+    fn noisy_alpha_falls_back_to_dense_and_short_input_keeps_sampling_fallback() {
+        let rgba = (0..4096)
+            .flat_map(|i| [0, 0, 0, (i * 73 + i / 64) as u8])
+            .collect();
+        let source = DecodedTexture::new(64, 64, rgba);
+        let texture = AlphaTexture::from_texture(&source);
+        assert!(matches!(texture.alpha, AlphaStorage::Dense(_)));
+        assert_eq!(texture.byte_len(), 4096);
+        for y in 0..64 {
+            for x in 0..64 {
+                assert_eq!(texture.alpha_at(x, y), source.rgba()[(y * 64 + x) * 4 + 3]);
+            }
+        }
+        let short = AlphaTexture::from(DecodedTexture::new(32, 32, vec![1, 2, 3, 42]));
+        assert_eq!(sample_alpha(&short, [0.0, 0.0]), 42);
+        assert_eq!(sample_alpha(&short, [1.0, 1.0]), 255);
     }
 
     #[test]

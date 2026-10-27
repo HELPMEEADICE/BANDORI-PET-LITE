@@ -80,8 +80,48 @@ impl Gpu {
         allow_hardware: bool,
         compatible_surface: Option<&wgpu::Surface<'static>>,
     ) -> Result<Self, RenderError> {
+        if compatible_surface.is_none() {
+            return Self::create_preferred(allow_hardware, None).map(|(gpu, _)| gpu);
+        }
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         Self::new_from(instance, allow_hardware, compatible_surface)
+    }
+
+    fn create_preferred(
+        allow_hardware: bool,
+        window: Option<Arc<Window>>,
+    ) -> Result<(Self, Option<wgpu::Surface<'static>>), RenderError> {
+        // wgpu sorts by device class, with Vulkan first for equal classes on
+        // Windows. A Vulkan discrete GPU (or a requested CPU adapter) already
+        // wins that search. Avoid initializing DX12/GL and their driver heaps
+        // just to discard their adapters. Less preferred classes and failures
+        // still use the full search, preserving cross-backend GPU selection.
+        #[cfg(windows)]
+        if let Ok(candidate) =
+            Self::create_on_backends(allow_hardware, window.clone(), wgpu::Backends::VULKAN)
+        {
+            if preferred_device_class(allow_hardware, candidate.0.adapter_info.device_type) {
+                return Ok(candidate);
+            }
+        }
+        Self::create_on_backends(allow_hardware, window, wgpu::Backends::all())
+    }
+
+    fn create_on_backends(
+        allow_hardware: bool,
+        window: Option<Arc<Window>>,
+        backends: wgpu::Backends,
+    ) -> Result<(Self, Option<wgpu::Surface<'static>>), RenderError> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let surface = window
+            .map(|window| instance.create_surface(window))
+            .transpose()
+            .map_err(|error| RenderError::Adapter(error.to_string()))?;
+        let gpu = Self::new_from(instance, allow_hardware, surface.as_ref())?;
+        Ok((gpu, surface))
     }
 
     /// Creates a device on an existing instance (so the surface stays valid).
@@ -129,6 +169,16 @@ impl Gpu {
             adapter_info,
         })
     }
+}
+
+#[cfg(any(windows, test))]
+fn preferred_device_class(allow_hardware: bool, device_type: wgpu::DeviceType) -> bool {
+    device_type
+        == if allow_hardware {
+            wgpu::DeviceType::DiscreteGpu
+        } else {
+            wgpu::DeviceType::Cpu
+        }
 }
 
 /// The swapchain plus its configuration.
@@ -663,12 +713,19 @@ impl Blit {
 /// A render-resolution-scaled intermediate target.
 struct Intermediate {
     view: wgpu::TextureView,
+    blit_bind_group: wgpu::BindGroup,
     width: u32,
     height: u32,
 }
 
 impl Intermediate {
-    fn new(device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat) -> Self {
+    fn new(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+        blit: &Blit,
+    ) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("bandori-pet.intermediate"),
             size: wgpu::Extent3d {
@@ -684,8 +741,10 @@ impl Intermediate {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let blit_bind_group = blit.bind_group(device, &view);
         Self {
             view,
+            blit_bind_group,
             width: width.max(1),
             height: height.max(1),
         }
@@ -722,15 +781,10 @@ impl SceneRenderer {
         // guaranteed to be compatible with this window. The very same surface is
         // then configured: creating a throwaway probe surface and dropping it
         // leaves dangling `SurfaceId`s inside wgpu.
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let probe_surface = instance
-            .create_surface(Arc::clone(&window))
-            .map_err(|error| RenderError::Adapter(error.to_string()))?;
-        let gpu = Arc::new(Gpu::new_from(
-            instance,
-            allow_hardware,
-            Some(&probe_surface),
-        )?);
+        let (gpu, probe_surface) =
+            Gpu::create_preferred(allow_hardware, Some(Arc::clone(&window)))?;
+        let gpu = Arc::new(gpu);
+        let probe_surface = probe_surface.expect("window supplied for surface creation");
         let surface = Surface::from_existing(&gpu, probe_surface, window, vsync)?;
         let format = surface.format();
         let renderer = WgpuLive2dRenderer::new(&gpu.device, format);
@@ -742,6 +796,7 @@ impl SceneRenderer {
             scale_dim(width, quality),
             scale_dim(height, quality),
             surface.format(),
+            &blit,
         );
         Ok(Self {
             gpu,
@@ -778,6 +833,7 @@ impl SceneRenderer {
             scale_dim(width, quality),
             scale_dim(height, quality),
             surface.format(),
+            &blit,
         );
         Ok(Self {
             gpu,
@@ -852,12 +908,22 @@ impl SceneRenderer {
     /// Switches the render-resolution scale.
     pub fn set_quality(&mut self, quality: f32) {
         self.quality = quality.clamp(0.25, 1.0);
+        self.resize_intermediate();
+    }
+
+    fn resize_intermediate(&mut self) {
         let (width, height) = self.surface.size();
+        let width = scale_dim(width, self.quality);
+        let height = scale_dim(height, self.quality);
+        if (self.intermediate.width, self.intermediate.height) == (width, height) {
+            return;
+        }
         self.intermediate = Intermediate::new(
             &self.gpu.device,
-            scale_dim(width, self.quality),
-            scale_dim(height, self.quality),
+            width,
+            height,
             self.surface.format(),
+            &self.blit,
         );
     }
 
@@ -870,13 +936,7 @@ impl SceneRenderer {
     /// Resizes the swapchain and the intermediate target.
     pub fn resize(&mut self, size: PhysicalSize<u32>, dpr: f64) {
         self.surface.resize(&self.gpu, size, dpr);
-        let (width, height) = self.surface.size();
-        self.intermediate = Intermediate::new(
-            &self.gpu.device,
-            scale_dim(width, self.quality),
-            scale_dim(height, self.quality),
-            self.surface.format(),
-        );
+        self.resize_intermediate();
     }
 
     /// Re-applies the vsync preference.
@@ -994,9 +1054,6 @@ impl SceneRenderer {
 
         // Pass 2: blit to the swapchain (scale + opacity).
         {
-            let bind_group = self
-                .blit
-                .bind_group(&self.gpu.device, &self.intermediate.view);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("bandori-pet.blit_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1014,7 +1071,7 @@ impl SceneRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.blit.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_bind_group(0, &self.intermediate.blit_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
 

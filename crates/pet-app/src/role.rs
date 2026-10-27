@@ -918,15 +918,19 @@ impl Role {
     fn take_hit_textures(model: &mut ModelHandle) -> Arc<Vec<AlphaTexture>> {
         // Consume one texture at a time: release its RGBA allocation as soon as
         // its alpha has been extracted. The GPU owns the unchanged full pixels.
+        let mut rgba_bytes = 0;
         let textures: Vec<_> = model
             .take_textures()
             .into_iter()
-            .map(AlphaTexture::from)
+            .map(|texture| {
+                rgba_bytes += texture.rgba().len();
+                AlphaTexture::from(texture)
+            })
             .collect();
         let alpha_bytes: usize = textures.iter().map(AlphaTexture::byte_len).sum();
         info!(
             alpha_bytes,
-            released_rgba_bytes = alpha_bytes * 4,
+            released_rgba_bytes = rgba_bytes,
             "CPU textures reduced to lossless alpha"
         );
         Arc::new(textures)

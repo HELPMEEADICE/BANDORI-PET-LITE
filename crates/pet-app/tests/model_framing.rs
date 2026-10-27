@@ -59,7 +59,7 @@ fn real_models_share_face_scale_and_have_room_for_motions() {
             .map(pet_input::hit::AlphaTexture::from)
             .map(|texture| texture.byte_len())
             .sum();
-        assert_eq!(rgba_bytes, alpha_bytes * 4);
+        assert!(alpha_bytes <= rgba_bytes / 4);
         assert!(model.textures().is_empty());
         assert!(model.take_textures().is_empty());
         assert_eq!(model.info().texture_count, texture_count);
