@@ -162,8 +162,8 @@ jobs:
           export SLINT_BACKEND=winit-software
           export RUST_LOG=info
           dbus-run-session -- xvfb-run -a timeout 30s target/debug/bandori-pet
-          rg 'settings process connected' "$root/logs"
-          rg 'bandori-ui exited' "$root/logs"
+          grep -rF -- 'settings process connected' "$root/logs"
+          grep -rF -- 'bandori-ui exited' "$root/logs"
       - name: Package Linux binaries
         run: bash scripts/package-linux.sh --debug --skip-build
       - name: Upload Linux application
