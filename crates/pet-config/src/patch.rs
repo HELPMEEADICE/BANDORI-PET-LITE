@@ -43,13 +43,26 @@ impl ApplyLevel {
 pub fn apply_level_for(key: &str) -> ApplyLevel {
     let root = key.split('.').next().unwrap_or(key);
     match root {
-        "fps" | "opacity" | "drag_locked" | "live2d_head_tracking_enabled"
-        | "live2d_mutual_gaze_enabled" | "live2d_idle_actions_enabled"
-        | "live2d_random_actions_enabled" | "click_motion_actions" | "click_motion_profiles"
-        | "click_motion_active_profile" | "model_action_settings"
-        | "emotion_behavior_enabled" | "game_topmost" | "hide_live2d_model"
-        | "dark_theme" | "language" | "move_all_roles_together" | "auto_start"
-        | "live2d_hit_alpha_threshold" | "model_picker_state" => ApplyLevel::Instant,
+        "fps"
+        | "opacity"
+        | "drag_locked"
+        | "live2d_head_tracking_enabled"
+        | "live2d_mutual_gaze_enabled"
+        | "live2d_idle_actions_enabled"
+        | "live2d_random_actions_enabled"
+        | "click_motion_actions"
+        | "click_motion_profiles"
+        | "click_motion_active_profile"
+        | "model_action_settings"
+        | "emotion_behavior_enabled"
+        | "game_topmost"
+        | "hide_live2d_model"
+        | "dark_theme"
+        | "language"
+        | "move_all_roles_together"
+        | "auto_start"
+        | "live2d_hit_alpha_threshold"
+        | "model_picker_state" => ApplyLevel::Instant,
 
         "character" | "costume" | "live2d_quality" | "models" => ApplyLevel::ReloadModel,
 
@@ -241,7 +254,10 @@ mod tests {
             ApplyLevel::Instant
         );
         assert_eq!(apply_level_for("live2d_quality"), ApplyLevel::ReloadModel);
-        assert_eq!(apply_level_for("models.0.window_x"), ApplyLevel::ReloadModel);
+        assert_eq!(
+            apply_level_for("models.0.window_x"),
+            ApplyLevel::ReloadModel
+        );
         assert_eq!(apply_level_for("live2d_scale"), ApplyLevel::RebuildWindow);
         assert_eq!(apply_level_for("gpu_acceleration"), ApplyLevel::RestartApp);
     }
@@ -284,7 +300,8 @@ mod tests {
     #[test]
     fn enum_patch_accepts_config_tokens() {
         let mut config = Config::default();
-        let patch = SettingsPatch::from_pairs([("live2d_quality", serde_json::json!("performance"))]);
+        let patch =
+            SettingsPatch::from_pairs([("live2d_quality", serde_json::json!("performance"))]);
         assert!(patch.apply_to(&mut config).is_empty());
         assert_eq!(config.live2d_quality, Live2dQuality::Performance);
     }

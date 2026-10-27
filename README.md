@@ -48,6 +48,34 @@ $env:BANDORI_PET_ROOT = "$PWD\run"
 
 脚本默认复制 `kasumi`、`anon` 和 `asuka` 的归档；可以通过 `-Characters` 指定其他角色，或使用 `-Release` 构建 release 版本。`BANDORI_PET_ROOT` 用于指定运行目录；开发和测试还可以使用 `RUST_LOG`、`BANDORI_PET_HEADLESS` 和 `BANDORI_PET_EXIT_AFTER_SECS`。
 
+### 持续集成
+
+每次 push、Pull Request 和手动触发都会运行 [GitHub Actions CI](.github/workflows/ci.yml)：
+
+- Rust：`cargo fmt` 格式检查，以及 Windows 上整个 workspace 的 `cargo check`、Clippy（告警视为错误）、两个程序的构建、单元与集成测试、文档测试和文档生成检查。
+- Slint：使用与 `Cargo.lock` 中编译器版本一致的 `slint-lsp` 检查所有已跟踪 `.slint` 文件的语法与格式；Windows 构建还会通过 `pet-ui/build.rs` 检查导入、类型、绑定和资源。
+- 工作流：使用 actionlint 检查 GitHub Actions 配置。
+
+本地提交前可运行：
+
+```powershell
+cargo fmt --all -- --check
+cargo check --workspace --all-targets --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo build --workspace --bins --locked
+cargo test --workspace --all-targets --locked
+cargo test --workspace --doc --locked
+```
+
+如需整理 Slint 格式，安装与锁文件版本一致的 `slint-lsp`，然后运行：
+
+```powershell
+$slintFiles = @(git ls-files -- '*.slint')
+slint-lsp format -i @slintFiles
+```
+
+首次克隆后需要运行 `git submodule update --init --recursive` 拉取 Neocari；CI 会自动完成。需要本地模型、真实窗口或 GPU 的 `#[ignore]` 测试仍需手动运行。
+
 ## 项目结构与开发资料
 
 桌宠和设置窗口分别运行在 `bandori-pet` 与 `bandori-ui` 两个进程中，通过命名管道通信。主要代码位于 `crates/`：`pet-app` 负责桌宠和托盘，`pet-ui` 负责设置界面，其他 crate 分别处理模型、渲染、交互、行为和配置。

@@ -182,4 +182,3 @@ mod tests {
         assert_eq!(local_hour_from_utc_secs(3600, -2), 23);
     }
 }
-

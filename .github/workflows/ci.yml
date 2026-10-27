@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+  # Keep the Slint/wgpu build within the hosted runner's disk budget.
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+
+jobs:
+  rustfmt:
+    name: Rust formatting
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  slint:
+    name: Slint syntax and formatting
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install the Slint formatter matching Cargo.lock
+        shell: bash
+        run: |
+          version="$(python3 -c 'import tomllib; lock = tomllib.load(open("Cargo.lock", "rb")); print(next(p["version"] for p in lock["package"] if p["name"] == "i-slint-compiler"))')"
+          mkdir -p "$RUNNER_TEMP/slint-tools"
+          curl --fail --location --retry 3 \
+            "https://github.com/slint-ui/slint/releases/download/v${version}/slint-lsp-x86_64-unknown-linux-gnu.tar.gz" \
+            --output "$RUNNER_TEMP/slint-tools/slint-lsp.tar.gz"
+          tar -xzf "$RUNNER_TEMP/slint-tools/slint-lsp.tar.gz" -C "$RUNNER_TEMP/slint-tools" --strip-components=1
+          echo "$RUNNER_TEMP/slint-tools" >> "$GITHUB_PATH"
+      - name: Check every tracked Slint file
+        shell: bash
+        run: |
+          git ls-files -z -- '*.slint' | xargs -0 --no-run-if-empty slint-lsp format -i
+          git diff --exit-code -- '*.slint'
+
+  workflows:
+    name: GitHub Actions lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: actionlint@1.7.12
+      - run: actionlint -color
+
+  windows:
+    name: Windows check, Clippy, build and tests
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Neocari is a Git submodule and a required path dependency.
+          submodules: recursive
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Check Rust and compile Slint UI
+        # pet-ui/build.rs checks Slint imports, types, bindings and resources.
+        run: cargo check --workspace --all-targets --locked
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Build both application binaries
+        run: cargo build --workspace --bins --locked
+      - name: Unit and integration tests
+        # GPU/model-dependent tests remain opt-in through their #[ignore] attributes.
+        run: cargo test --workspace --all-targets --locked
+      - name: Documentation tests
+        run: cargo test --workspace --doc --locked
+      - name: Check documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps --locked

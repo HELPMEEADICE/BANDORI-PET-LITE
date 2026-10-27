@@ -145,8 +145,8 @@ fn check_cancelled(cancelled: &AtomicBool) -> Result<(), DownloadError> {
 /// Read the entire stream rather than trusting the embedded member index. This
 /// catches truncated transfers, checksum errors and HTML error responses.
 fn validate_archive(path: &Path, cancelled: &AtomicBool) -> Result<(), DownloadError> {
-    let mut decoder = zstd::stream::read::Decoder::new(File::open(path)?)?;
-    let mut archive = tar::Archive::new(&mut decoder);
+    let decoder = zstd::stream::read::Decoder::new(File::open(path)?)?;
+    let mut archive = tar::Archive::new(decoder);
     let mut found = false;
     for entry in archive.entries()? {
         check_cancelled(cancelled)?;
@@ -174,7 +174,7 @@ fn validate_archive(path: &Path, cancelled: &AtomicBool) -> Result<(), DownloadE
             }
         }
     }
-    drop(archive);
+    let mut decoder = archive.into_inner();
     let mut buffer = [0u8; 64 * 1024];
     while decoder.read(&mut buffer)? != 0 {
         check_cancelled(cancelled)?;

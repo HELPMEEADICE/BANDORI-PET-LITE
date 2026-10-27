@@ -25,6 +25,8 @@ pub type AppResult<T> = Result<T, Box<dyn std::error::Error>>;
 /// Frame budget floor so a 240 fps request cannot spin at 100 %.
 const MIN_FRAME_MS: u64 = 1000 / 240;
 
+type DragPeer = (usize, (i32, i32), (i32, i32));
+
 /// Everything the pet process owns.
 pub struct PetApp {
     paths: Paths,
@@ -58,7 +60,7 @@ pub struct PetApp {
     tray_sender: Option<std::sync::mpsc::Sender<TrayEvent>>,
     create_tray: bool,
     /// Role currently being dragged, and its rect at the previous tick.
-    drag_peer: Option<(usize, (i32, i32), (i32, i32))>,
+    drag_peer: Option<DragPeer>,
     /// Last applied `auto_start` value, so the registry is written only on change.
     auto_start_applied: bool,
 }
@@ -206,9 +208,7 @@ impl PetApp {
             return;
         }
         self.reconcile_roles(event_loop);
-        if self.roles.is_empty() {
-            self.open_settings(SettingsPage::Model);
-        } else if self.load.is_first_run() {
+        if self.roles.is_empty() || self.load.is_first_run() {
             self.open_settings(SettingsPage::Model);
         }
     }

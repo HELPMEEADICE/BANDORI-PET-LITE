@@ -570,11 +570,12 @@ pub fn render_preview(
         for pixel in row[..width as usize * 4].chunks_exact(4) {
             let alpha = pixel[3] as u32;
             for channel in &pixel[..3] {
-                pixels.push(if alpha == 0 {
-                    0
-                } else {
-                    ((*channel as u32 * 255 + alpha / 2) / alpha).min(255) as u8
-                });
+                pixels.push(
+                    (*channel as u32 * 255 + alpha / 2)
+                        .checked_div(alpha)
+                        .unwrap_or(0)
+                        .min(255) as u8,
+                );
             }
             pixels.push(pixel[3]);
         }

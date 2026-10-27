@@ -115,8 +115,10 @@ impl BlinkBreath {
                         self.next_blink_in = if double {
                             0.18
                         } else {
-                            self.rng
-                                .range_f32(Self::MEAN_INTERVAL_SECS * 0.4, Self::MEAN_INTERVAL_SECS * 1.6)
+                            self.rng.range_f32(
+                                Self::MEAN_INTERVAL_SECS * 0.4,
+                                Self::MEAN_INTERVAL_SECS * 1.6,
+                            )
                         };
                     }
                 }

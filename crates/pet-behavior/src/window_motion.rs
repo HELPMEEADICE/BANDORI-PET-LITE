@@ -148,11 +148,7 @@ impl WindowMotionPlayer {
             }
             WindowMotionKind::Settle => {
                 let drop = (2.0 + intensity * 0.08).clamp(3.0, 10.0) as i32 as f32;
-                vec![
-                    (0.0, (0.0, 0.0)),
-                    (0.45, (0.0, drop)),
-                    (1.0, (0.0, 0.0)),
-                ]
+                vec![(0.0, (0.0, 0.0)), (0.45, (0.0, drop)), (1.0, (0.0, 0.0))]
             }
         };
         self.running = Some(Running {
@@ -214,7 +210,10 @@ fn evaluate(keyframes: &[(f32, (f32, f32))], progress: f32) -> (f32, f32) {
             );
         }
     }
-    keyframes.last().map(|(_, value)| *value).unwrap_or((0.0, 0.0))
+    keyframes
+        .last()
+        .map(|(_, value)| *value)
+        .unwrap_or((0.0, 0.0))
 }
 
 impl WindowMotionKind {
@@ -287,5 +286,3 @@ mod tests {
         assert!((out_cubic(0.5) - 0.875).abs() < 1e-6);
     }
 }
-
-

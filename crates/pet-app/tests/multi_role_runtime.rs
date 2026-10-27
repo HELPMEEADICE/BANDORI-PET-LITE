@@ -205,10 +205,12 @@ fn add_remove_swap_and_restore_real_roles() {
         "anon",
         catalog.find("anon", "school_winter_hs_1st").unwrap(),
     );
-    let mut config = Config::default();
-    config.models = vec![first];
-    config.live2d_scale = 50;
-    config.emotion_behavior_enabled = false;
+    let config = Config {
+        models: vec![first],
+        live2d_scale: 50,
+        emotion_behavior_enabled: false,
+        ..Default::default()
+    };
     pet_config::save_config(&paths.config(), &config).unwrap();
     let app = PetApp::new_with(
         paths.clone(),

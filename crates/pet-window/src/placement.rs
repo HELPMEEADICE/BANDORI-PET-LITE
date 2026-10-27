@@ -401,8 +401,10 @@ mod win32_monitors {
             .encode_utf16()
             .chain(std::iter::once(0))
             .collect();
-        let mut device = DISPLAY_DEVICEW::default();
-        device.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as u32;
+        let mut device = DISPLAY_DEVICEW {
+            cb: std::mem::size_of::<DISPLAY_DEVICEW>() as u32,
+            ..Default::default()
+        };
         let ok = unsafe { EnumDisplayDevicesW(PCWSTR(wide.as_ptr()), 0, &mut device, 0) };
         if !ok.as_bool() {
             return (String::new(), String::new(), String::new());
@@ -544,7 +546,7 @@ mod tests {
         let resolved = resolve_position(
             &Placement::default(),
             (500, 625),
-            &[primary.clone()],
+            std::slice::from_ref(&primary),
             Some(&primary),
         );
         assert_eq!(resolved.decision, PositionDecision::Default);
@@ -596,7 +598,12 @@ mod tests {
             screen_geometry: [0, 0, 1920, 1080],
             ..Placement::default()
         };
-        let resolved = resolve_position(&placement, (500, 625), &[primary.clone()], Some(&primary));
+        let resolved = resolve_position(
+            &placement,
+            (500, 625),
+            std::slice::from_ref(&primary),
+            Some(&primary),
+        );
         assert_eq!(resolved.decision, PositionDecision::Absolute);
         assert_eq!((resolved.x, resolved.y), (100, 200));
     }
@@ -609,7 +616,12 @@ mod tests {
             y: 250,
             ..Placement::default()
         };
-        let resolved = resolve_position(&placement, (500, 625), &[primary.clone()], Some(&primary));
+        let resolved = resolve_position(
+            &placement,
+            (500, 625),
+            std::slice::from_ref(&primary),
+            Some(&primary),
+        );
         assert_eq!((resolved.x, resolved.y), (700, 250));
         assert_eq!(resolved.decision, PositionDecision::Absolute);
     }
@@ -626,7 +638,12 @@ mod tests {
             relative_y: 1.0,
             ..Placement::default()
         };
-        let resolved = resolve_position(&placement, (500, 625), &[primary.clone()], Some(&primary));
+        let resolved = resolve_position(
+            &placement,
+            (500, 625),
+            std::slice::from_ref(&primary),
+            Some(&primary),
+        );
         assert_eq!(resolved.decision, PositionDecision::Relative);
         assert_eq!(resolved.x, 2560 - 500);
         assert_eq!(resolved.y, 1400 - 625);
@@ -642,7 +659,12 @@ mod tests {
             screen_geometry: [3000, 0, 1920, 1080],
             ..Placement::default()
         };
-        let resolved = resolve_position(&placement, (500, 625), &[primary.clone()], Some(&primary));
+        let resolved = resolve_position(
+            &placement,
+            (500, 625),
+            std::slice::from_ref(&primary),
+            Some(&primary),
+        );
         assert_eq!(resolved.decision, PositionDecision::Fallback);
         assert!(resolved.x <= 1920 - 500);
     }
@@ -654,7 +676,12 @@ mod tests {
         assert_eq!(placement.screen_name, "primary");
         assert_eq!(placement.width, 500);
         assert_eq!(placement.relative_x, 1400.0 / 1420.0);
-        let resolved = resolve_position(&placement, (500, 625), &[primary.clone()], Some(&primary));
+        let resolved = resolve_position(
+            &placement,
+            (500, 625),
+            std::slice::from_ref(&primary),
+            Some(&primary),
+        );
         assert_eq!((resolved.x, resolved.y), (1400, 400));
     }
 }

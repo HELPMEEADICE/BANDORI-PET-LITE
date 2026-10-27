@@ -36,6 +36,7 @@ export component AnimatedContent inherits Rectangle {
         running: !root.entered;
         triggered => { root.entered = true; }
     }
+
     content := Rectangle {
         y: 8px;
         width: root.width;
@@ -43,12 +44,16 @@ export component AnimatedContent inherits Rectangle {
         background: transparent;
         @children
     }
+
     states [
         shown when root.entered: {
             opacity: 1;
             content.y: 0px;
             in {
-                animate opacity, content.y { duration: Motion.entrance; easing: ease-out; }
+                animate opacity, content.y {
+                    duration: Motion.entrance;
+                    easing: ease-out;
+                }
             }
         }
     ]
@@ -93,7 +98,10 @@ export component ActionButton inherits Rectangle {
     border-width: primary ? 0px : 1px;
     border-color: focus.has-focus ? Colors.accent : Colors.border;
     opacity: enabled ? 1 : 0.45;
-    animate background, border-color, opacity { duration: Motion.feedback; easing: ease-out; }
+    animate background, border-color, opacity {
+        duration: Motion.feedback;
+        easing: ease-out;
+    }
     accessible-role: button;
     accessible-label: text;
     accessible-enabled: enabled;
@@ -105,8 +113,12 @@ export component ActionButton inherits Rectangle {
         text: root.text;
         color: root.text-color;
         horizontal-alignment: center;
-        animate y { duration: Motion.feedback; easing: ease-out; }
+        animate y {
+            duration: Motion.feedback;
+            easing: ease-out;
+        }
     }
+
     focus := FocusScope {
         enabled: root.enabled;
         key-pressed(event) => {
@@ -114,6 +126,7 @@ export component ActionButton inherits Rectangle {
             return reject;
         }
     }
+
     touch := TouchArea {
         enabled: root.enabled;
         mouse-cursor: pointer;
@@ -129,7 +142,10 @@ export component ToggleRow inherits Rectangle {
     height: hint == "" ? 34px : 53px;
     border-radius: 6px;
     background: touch.has-hover ? Colors.hover : transparent;
-    animate background { duration: Motion.feedback; easing: ease-out; }
+    animate background {
+        duration: Motion.feedback;
+        easing: ease-out;
+    }
     accessible-role: checkbox;
     accessible-label: text;
     accessible-checked: checked;
@@ -140,9 +156,16 @@ export component ToggleRow inherits Rectangle {
             spacing: 3px;
             alignment: center;
             horizontal-stretch: 1;
-            Body { text: root.text; }
-            if root.hint != "" : Hint { text: root.hint; font-size: 12px; }
+            Body {
+                text: root.text;
+            }
+
+            if root.hint != "": Hint {
+                text: root.hint;
+                font-size: 12px;
+            }
         }
+
         Rectangle {
             width: 40px;
             horizontal-stretch: 0;
@@ -155,7 +178,10 @@ export component ToggleRow inherits Rectangle {
                 border-width: 1px;
                 border-color: focus.has-focus ? Colors.accent : (root.checked ? Colors.accent : #999999);
                 background: root.checked ? Colors.accent : transparent;
-                animate background, border-color { duration: Motion.selection; easing: ease-out; }
+                animate background, border-color {
+                    duration: Motion.selection;
+                    easing: ease-out;
+                }
                 Rectangle {
                     x: root.checked ? 23px : 4px;
                     y: (parent.height - self.height) / 2;
@@ -163,22 +189,33 @@ export component ToggleRow inherits Rectangle {
                     height: 13px;
                     border-radius: 7px;
                     background: root.checked ? #ffffff : #cecece;
-                    animate x, background { duration: Motion.selection; easing: ease-out; }
+                    animate x, background {
+                        duration: Motion.selection;
+                        easing: ease-out;
+                    }
                 }
             }
         }
+
         Body {
-            text: root.checked ? "On" : "Off"; width: 24px; font-size: 13px;
+            text: root.checked ? "On" : "Off";
+            width: 24px;
+            font-size: 13px;
             color: root.checked ? Colors.accent : Colors.muted;
-            animate color { duration: Motion.selection; easing: ease-out; }
+            animate color {
+                duration: Motion.selection;
+                easing: ease-out;
+            }
         }
     }
+
     focus := FocusScope {
         key-pressed(event) => {
             if event.text == " " { root.toggled(!root.checked); return accept; }
             return reject;
         }
     }
+
     touch := TouchArea {
         mouse-cursor: pointer;
         clicked => { focus.focus(); root.toggled(!root.checked); }
@@ -196,17 +233,27 @@ export component NavButton inherits Rectangle {
     background: touch.pressed ? Colors.soft : (active ? Colors.soft : (touch.has-hover ? Colors.hover : Colors.panel));
     border-width: 1px;
     border-color: active || focus.has-focus ? Colors.accent : Colors.border;
-    animate background, border-color { duration: Motion.selection; easing: ease-out; }
+    animate background, border-color {
+        duration: Motion.selection;
+        easing: ease-out;
+    }
     accessible-role: button;
     accessible-label: text;
     accessible-action-default => { root.clicked(); }
     Rectangle {
-        x: -4px; y: (parent.height - self.height) / 2;
-        width: 4px; height: root.active ? 27px : 8px;
+        x: -4px;
+        y: (parent.height - self.height) / 2;
+        width: 4px;
+        height: root.active ? 27px : 8px;
         opacity: root.active ? 1 : 0;
-        border-radius: 2px; background: Colors.accent;
-        animate height, opacity { duration: Motion.selection; easing: ease-out; }
+        border-radius: 2px;
+        background: Colors.accent;
+        animate height, opacity {
+            duration: Motion.selection;
+            easing: ease-out;
+        }
     }
+
     Rectangle {
         x: 10px;
         y: (parent.height - self.height) / 2;
@@ -214,19 +261,42 @@ export component NavButton inherits Rectangle {
         height: 29px;
         border-radius: 9px;
         background: root.active ? #f00063 : root.tint.with-alpha(0.18);
-        animate background { duration: Motion.selection; easing: ease-out; }
+        animate background {
+            duration: Motion.selection;
+            easing: ease-out;
+        }
         Image {
-            x: 5px; y: 5px; width: 19px; height: 19px; source: root.icon; image-fit: contain;
+            x: 5px;
+            y: 5px;
+            width: 19px;
+            height: 19px;
+            source: root.icon;
+            image-fit: contain;
             colorize: root.active ? #ffffff : root.tint;
-            animate colorize { duration: Motion.selection; easing: ease-out; }
+            animate colorize {
+                duration: Motion.selection;
+                easing: ease-out;
+            }
         }
     }
-    Body { x: 49px; width: parent.width - 59px; height: parent.height; text: root.text; font-weight: root.active ? 700 : 400; }
+
+    Body {
+        x: 49px;
+        width: parent.width - 59px;
+        height: parent.height;
+        text: root.text;
+        font-weight: root.active ? 700 : 400;
+    }
+
     focus := FocusScope {
         key-pressed(event) => {
             if event.text == " " || event.text == "\n" { root.clicked(); return accept; }
             return reject;
         }
     }
-    touch := TouchArea { mouse-cursor: pointer; clicked => { focus.focus(); root.clicked(); } }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { focus.focus(); root.clicked(); }
+    }
 }

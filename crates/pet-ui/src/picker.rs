@@ -263,8 +263,12 @@ impl Picker {
         window.set_search("".into());
         window.set_character_filter(0);
         window.set_selected_band(
-            self.catalog.borrow().character(key)
-                .map(|character| character.band_id.as_str()).unwrap_or("").into(),
+            self.catalog
+                .borrow()
+                .character(key)
+                .map(|character| character.band_id.as_str())
+                .unwrap_or("")
+                .into(),
         );
         window.set_costume_search("".into());
         window.set_costume_filter(0);
@@ -633,7 +637,8 @@ mod tests {
             Rc::new(RefCell::new(fixture_catalog())),
             &Paths::with_root("missing-test-root"),
             Rc::new(|_| true),
-        ).unwrap();
+        )
+        .unwrap();
         picker.wire(&window);
         window.set_selected_band("poppin_party".into());
         window.set_character_filter(2);
@@ -648,7 +653,17 @@ mod tests {
         assert_eq!(window.get_picker_costumes().row_count(), 2);
         window.invoke_picker_back();
         assert_eq!(window.get_picker_stage(), 1);
-        assert_eq!(window.get_picker_rows().row_data(0).unwrap().cards.row_data(0).unwrap().key, "anon");
+        assert_eq!(
+            window
+                .get_picker_rows()
+                .row_data(0)
+                .unwrap()
+                .cards
+                .row_data(0)
+                .unwrap()
+                .key,
+            "anon"
+        );
     }
 
     #[test]

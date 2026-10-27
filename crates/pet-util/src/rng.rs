@@ -14,7 +14,11 @@ impl Rng {
     /// Creates a generator with an explicit seed (0 is remapped to a constant).
     pub fn seeded(seed: u64) -> Self {
         Self {
-            state: if seed == 0 { 0x9e37_79b9_7f4a_7c15 } else { seed },
+            state: if seed == 0 {
+                0x9e37_79b9_7f4a_7c15
+            } else {
+                seed
+            },
         }
     }
 

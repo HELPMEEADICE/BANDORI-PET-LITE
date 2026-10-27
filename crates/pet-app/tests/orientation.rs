@@ -42,15 +42,22 @@ fn moc_lives_in_a_y_down_canvas_and_needs_a_flip() {
     let canvas_height = model.info().canvas_height;
     eprintln!(
         "moc bounds=({:.1},{:.1})..({:.1},{:.1}) canvas={}x{}",
-        bounds.min_x, bounds.min_y, bounds.max_x, bounds.max_y,
-        model.info().canvas_width, canvas_height
+        bounds.min_x,
+        bounds.min_y,
+        bounds.max_x,
+        bounds.max_y,
+        model.info().canvas_width,
+        canvas_height
     );
 
     assert!(model.flips_y(), "Cubism 2 must request a y flip");
     // Canvas-pixel space: everything is positive and inside the canvas.
-    assert!(bounds.min_y >= 0.0, "moc y should start at 0 (top-left origin)");
     assert!(
-        bounds.max_y <= canvas_height as f32 * 1.2,
+        bounds.min_y >= 0.0,
+        "moc y should start at 0 (top-left origin)"
+    );
+    assert!(
+        bounds.max_y <= canvas_height * 1.2,
         "moc y should stay inside the canvas ({} > {})",
         bounds.max_y,
         canvas_height
@@ -62,7 +69,10 @@ fn moc_lives_in_a_y_down_canvas_and_needs_a_flip() {
     let matrix = fit_matrix(bounds, 1.0, true);
     let head_side = matrix.transform_y(bounds.min_y);
     let feet_side = matrix.transform_y(bounds.max_y);
-    eprintln!("flipped: y={:.1} -> clip {head_side:.3}; y={:.1} -> clip {feet_side:.3}", bounds.min_y, bounds.max_y);
+    eprintln!(
+        "flipped: y={:.1} -> clip {head_side:.3}; y={:.1} -> clip {feet_side:.3}",
+        bounds.min_y, bounds.max_y
+    );
     assert!(
         head_side > 0.9 && feet_side < -0.9,
         "flip must put the top of the model at the top of the window"
@@ -75,9 +85,9 @@ fn moc_lives_in_a_y_down_canvas_and_needs_a_flip() {
 
 #[test]
 fn moc3_is_centred_and_y_up() {
-    let Some((model, bounds)) = load(
-        "models/anon.zst::casual_spring_01/adv_live2d_anon_002_casual_spring_01.model3.json",
-    ) else {
+    let Some((model, bounds)) =
+        load("models/anon.zst::casual_spring_01/adv_live2d_anon_002_casual_spring_01.model3.json")
+    else {
         eprintln!("skipped: set BANDORI_PET_TEST_MODELS");
         return;
     };

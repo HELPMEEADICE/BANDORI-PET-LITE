@@ -9,6 +9,8 @@ use tracing::{debug, warn};
 
 /// Events surfaced to the event loop.
 #[derive(Debug, Clone, PartialEq)]
+// Keep messages inline when passing them through the channel.
+#[allow(clippy::large_enum_variant)]
 pub enum IpcEvent {
     /// The settings process connected.
     Connected,
@@ -52,7 +54,10 @@ impl IpcHost {
 
     /// `true` when a settings process is attached.
     pub fn is_connected(&self) -> bool {
-        self.writer.lock().map(|guard| guard.is_some()).unwrap_or(false)
+        self.writer
+            .lock()
+            .map(|guard| guard.is_some())
+            .unwrap_or(false)
     }
 
     /// Sends one message to the settings process (dropped when disconnected).
@@ -126,6 +131,3 @@ fn listen_loop(name: String, tx: Sender<IpcEvent>, writer: Arc<Mutex<Option<Conn
         let _ = tx.send(IpcEvent::Disconnected);
     }
 }
-
-
-

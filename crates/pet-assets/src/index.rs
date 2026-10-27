@@ -66,15 +66,17 @@ impl Default for ModelIndex {
 impl ModelIndex {
     /// Iterates `(archive key, character, costume)` for every usable costume.
     pub fn costumes(&self) -> impl Iterator<Item = (&str, &ArchiveScan, &CostumeEntry)> {
-        self.archives.iter().filter_map(|(key, entry)| {
-            entry
-                .result
-                .as_ref()
-                .map(|scan| (key.as_str(), scan, scan.costumes.as_slice()))
-        })
-        .flat_map(|(key, scan, costumes)| {
-            costumes.iter().map(move |costume| (key, scan, costume))
-        })
+        self.archives
+            .iter()
+            .filter_map(|(key, entry)| {
+                entry
+                    .result
+                    .as_ref()
+                    .map(|scan| (key.as_str(), scan, scan.costumes.as_slice()))
+            })
+            .flat_map(|(key, scan, costumes)| {
+                costumes.iter().map(move |costume| (key, scan, costume))
+            })
     }
 
     /// Character keys sorted alphabetically.
@@ -207,7 +209,9 @@ pub fn load_or_scan(models_dir: &Path) -> ModelIndex {
         }
     }
 
-    cached.archives.retain(|key, _| archives_on_disk.contains(key));
+    cached
+        .archives
+        .retain(|key, _| archives_on_disk.contains(key));
     cached.version = 1;
 
     if cached != read_cached_index(&cache_path) {
@@ -350,10 +354,12 @@ pub fn scan_archive(archive: &Path) -> Result<ArchiveScan, ModelIndexError> {
 pub fn list_members(archive: &Path) -> Result<Vec<String>, ModelIndexError> {
     let mut decoder = open_decoder(archive)?;
     let mut archive_reader = tar::Archive::new(&mut decoder);
-    let entries = archive_reader.entries().map_err(|source| ModelIndexError::Tar {
-        path: archive.to_path_buf(),
-        source,
-    })?;
+    let entries = archive_reader
+        .entries()
+        .map_err(|source| ModelIndexError::Tar {
+            path: archive.to_path_buf(),
+            source,
+        })?;
 
     let mut members = Vec::new();
     for entry in entries {
@@ -392,7 +398,9 @@ struct ArchiveMemberList {
     files: Vec<String>,
 }
 
-fn open_decoder(archive: &Path) -> Result<zstd::stream::read::Decoder<'static, std::io::BufReader<fs::File>>, ModelIndexError> {
+fn open_decoder(
+    archive: &Path,
+) -> Result<zstd::stream::read::Decoder<'static, std::io::BufReader<fs::File>>, ModelIndexError> {
     let file = fs::File::open(archive).map_err(|source| ModelIndexError::Archive {
         path: archive.to_path_buf(),
         source,
@@ -409,7 +417,12 @@ mod tests {
     use std::io::Write;
 
     /// Builds a tiny `.zst` tar containing an index member plus two costumes.
-    fn write_archive(dir: &Path, stem: &str, members: &[(&str, &str)], index: Option<&str>) -> PathBuf {
+    fn write_archive(
+        dir: &Path,
+        stem: &str,
+        members: &[(&str, &str)],
+        index: Option<&str>,
+    ) -> PathBuf {
         let archive_path = dir.join(format!("{stem}.zst"));
         let file = fs::File::create(&archive_path).unwrap();
         let encoder = zstd::stream::write::Encoder::new(file, 3).unwrap();
@@ -447,17 +460,18 @@ mod tests {
             &[
                 ("live_default/model.json", "{}"),
                 ("live_default/data/model.moc", "x"),
-                (
-                    "casual/adv_live2d_kasumi_casual.model3.json",
-                    "{}",
-                ),
+                ("casual/adv_live2d_kasumi_casual.model3.json", "{}"),
             ],
             None,
         );
         let scan = scan_archive(&archive).unwrap();
         assert_eq!(scan.character, "kasumi");
         assert_eq!(scan.costumes.len(), 2);
-        let live = scan.costumes.iter().find(|c| c.id == "live_default").unwrap();
+        let live = scan
+            .costumes
+            .iter()
+            .find(|c| c.id == "live_default")
+            .unwrap();
         assert_eq!(live.format, ModelFormat::Moc);
         assert_eq!(live.path, "models/kasumi.zst::live_default/model.json");
         let casual = scan.costumes.iter().find(|c| c.id == "casual").unwrap();
@@ -507,7 +521,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let models = dir.path().join("models");
         fs::create_dir_all(&models).unwrap();
-        write_archive(&models, "kasumi", &[("live_default/model.json", "{}")], None);
+        write_archive(
+            &models,
+            "kasumi",
+            &[("live_default/model.json", "{}")],
+            None,
+        );
         let first = load_or_scan(&models);
         let cache = read_cached_index(&models.join(MODEL_INDEX_FILE));
         assert_eq!(first, cache);

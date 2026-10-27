@@ -130,7 +130,8 @@ impl ModelCache {
 
     /// Makes sure the costume behind `spec` is unpacked and returns its model path.
     pub fn resolve(&self, spec: &str) -> Result<ResolvedModel, CacheError> {
-        let model_path = ModelPath::parse(spec).map_err(|error| CacheError::Path(error.to_string()))?;
+        let model_path =
+            ModelPath::parse(spec).map_err(|error| CacheError::Path(error.to_string()))?;
         let costume = model_path
             .costume()
             .ok_or_else(|| CacheError::Path(spec.to_owned()))?;
@@ -164,7 +165,11 @@ impl ModelCache {
                 "extracting costume into cache"
             );
             let started = std::time::Instant::now();
-            self.extract_prefix(&archive, &format!("{costume}/"), &self.cache_root.join(&stem))?;
+            self.extract_prefix(
+                &archive,
+                &format!("{costume}/"),
+                &self.cache_root.join(&stem),
+            )?;
             write_json(&stamp_path, &expected)?;
             info!(
                 costume,
@@ -211,7 +216,8 @@ impl ModelCache {
 
     /// Extracts a single member (for example `character.png`) and returns its path.
     pub fn extract_member(&self, spec: &str) -> Result<PathBuf, CacheError> {
-        let model_path = ModelPath::parse(spec).map_err(|error| CacheError::Path(error.to_string()))?;
+        let model_path =
+            ModelPath::parse(spec).map_err(|error| CacheError::Path(error.to_string()))?;
         let archive = model_path.archive_path(&self.models_root);
         let stem = archive
             .file_stem()
@@ -246,7 +252,8 @@ impl ModelCache {
         prefix: &str,
         destination: &Path,
     ) -> Result<(), CacheError> {
-        let prefix = normalize_member(prefix).map_err(|error| CacheError::Path(error.to_string()))?;
+        let prefix =
+            normalize_member(prefix).map_err(|error| CacheError::Path(error.to_string()))?;
         let file = fs::File::open(archive_path)
             .map_err(|error| CacheError::Io(format!("{}: {error}", archive_path.display())))?;
         let decoder = zstd::stream::read::Decoder::new(file)
@@ -271,13 +278,15 @@ impl ModelCache {
                 // Directories are recreated implicitly; symlinks are refused.
                 continue;
             }
-            let relative = normalize_member(&raw_path)
-                .map_err(|error| CacheError::Path(error.to_string()))?;
+            let relative =
+                normalize_member(&raw_path).map_err(|error| CacheError::Path(error.to_string()))?;
             let relative_path = PathBuf::from(relative);
-            if relative_path
-                .components()
-                .any(|component| matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_)))
-            {
+            if relative_path.components().any(|component| {
+                matches!(
+                    component,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
+            }) {
                 continue;
             }
             let destination_path = destination.join(&relative_path);
@@ -292,8 +301,9 @@ impl ModelCache {
             entry
                 .read_to_end(&mut buffer)
                 .map_err(|error| CacheError::Io(error.to_string()))?;
-            fs::write(&destination_path, &buffer)
-                .map_err(|error| CacheError::Io(format!("{}: {error}", destination_path.display())))?;
+            fs::write(&destination_path, &buffer).map_err(|error| {
+                CacheError::Io(format!("{}: {error}", destination_path.display()))
+            })?;
             extracted += 1;
         }
 
@@ -334,7 +344,7 @@ impl ModelCache {
         }
         let mut state = self.read_lru();
         let mut entries: Vec<(String, u64)> = state.entries.clone().into_iter().collect();
-        entries.sort_by(|left, right| right.1.cmp(&left.1));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.1));
 
         let mut kept = 0usize;
         let mut evicted = Vec::new();
@@ -348,7 +358,9 @@ impl ModelCache {
         }
 
         for key in evicted {
-            let directory = self.cache_root.join(key.replace('/', std::path::MAIN_SEPARATOR_STR));
+            let directory = self
+                .cache_root
+                .join(key.replace('/', std::path::MAIN_SEPARATOR_STR));
             if directory.starts_with(&self.cache_root) {
                 debug!(key = %key, "evicting cached costume");
                 let _ = fs::remove_dir_all(&directory);
@@ -411,7 +423,8 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), CacheError> {
         fs::create_dir_all(parent)
             .map_err(|error| CacheError::Io(format!("{}: {error}", parent.display())))?;
     }
-    let bytes = serde_json::to_vec_pretty(value).map_err(|error| CacheError::Io(error.to_string()))?;
+    let bytes =
+        serde_json::to_vec_pretty(value).map_err(|error| CacheError::Io(error.to_string()))?;
     fs::write(path, bytes).map_err(|error| CacheError::Io(format!("{}: {error}", path.display())))
 }
 
@@ -498,12 +511,22 @@ mod tests {
         let cache = ModelCache::new(dir.path().join("portraits"), &models);
         let spec = "models/kasumi.zst::character.png";
         // extract_member accepts a fully resolved archive path from the picker.
-        let spec = spec.replace("models/kasumi.zst", &models.join("kasumi.zst").to_string_lossy());
+        let spec = spec.replace(
+            "models/kasumi.zst",
+            &models.join("kasumi.zst").to_string_lossy(),
+        );
         let portrait = cache.extract_member(&spec).unwrap();
         assert_eq!(fs::read_to_string(&portrait).unwrap(), "old");
-        build_archive(&models, "kasumi", &[("character.png", "new portrait contents")]);
+        build_archive(
+            &models,
+            "kasumi",
+            &[("character.png", "new portrait contents")],
+        );
         cache.extract_member(&spec).unwrap();
-        assert_eq!(fs::read_to_string(portrait).unwrap(), "new portrait contents");
+        assert_eq!(
+            fs::read_to_string(portrait).unwrap(),
+            "new portrait contents"
+        );
     }
 
     #[test]
@@ -540,11 +563,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let models = dir.path().join("models");
         fs::create_dir_all(&models).unwrap();
-        let archive = build_archive(&models, "kasumi", &[("live_default/model.json", "{\"v\":1}")]);
+        let archive = build_archive(
+            &models,
+            "kasumi",
+            &[("live_default/model.json", "{\"v\":1}")],
+        );
         let cache = ModelCache::new(dir.path().join("cache"), &models);
         let spec = "models/kasumi.zst::live_default/model.json";
         let resolved = cache.resolve(spec).unwrap();
-        assert_eq!(fs::read_to_string(&resolved.model_path).unwrap(), "{\"v\":1}");
+        assert_eq!(
+            fs::read_to_string(&resolved.model_path).unwrap(),
+            "{\"v\":1}"
+        );
 
         // Rewrite the archive with different content and a different size.
         fs::remove_file(&archive).unwrap();
@@ -554,7 +584,9 @@ mod tests {
             &[("live_default/model.json", "{\"v\":2,\"pad\":true}")],
         );
         let resolved = cache.resolve(spec).unwrap();
-        assert!(fs::read_to_string(&resolved.model_path).unwrap().contains("\"v\":2"));
+        assert!(fs::read_to_string(&resolved.model_path)
+            .unwrap()
+            .contains("\"v\":2"));
     }
 
     #[test]
@@ -591,7 +623,10 @@ mod tests {
         let cache = ModelCache::new(dir.path().join("cache"), &models).with_capacity(2);
         for index in 0..4 {
             let key = format!("kasumi/live_{index}");
-            let directory = cache.cache_root().join("kasumi").join(format!("live_{index}"));
+            let directory = cache
+                .cache_root()
+                .join("kasumi")
+                .join(format!("live_{index}"));
             fs::create_dir_all(&directory).unwrap();
             cache.touch(&key);
         }
@@ -603,5 +638,3 @@ mod tests {
         assert_eq!(remaining, 2);
     }
 }
-
-

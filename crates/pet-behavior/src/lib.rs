@@ -224,7 +224,10 @@ impl RoleBehavior {
             &mut self.rng,
         );
         let Some((motion, expression)) = resolved else {
-            trace!(region = region.key(), "click region configured to do nothing");
+            trace!(
+                region = region.key(),
+                "click region configured to do nothing"
+            );
             return Vec::new();
         };
 
@@ -259,7 +262,9 @@ impl RoleBehavior {
                 if self.config.default_expression.is_empty() {
                     commands.push(Command::PlayExpression(String::new()));
                 } else {
-                    commands.push(Command::PlayExpression(self.config.default_expression.clone()));
+                    commands.push(Command::PlayExpression(
+                        self.config.default_expression.clone(),
+                    ));
                 }
             }
         }
@@ -420,10 +425,9 @@ mod tests {
         let expressions = vec!["f01".to_owned()];
         let mut behavior = RoleBehavior::new(7);
         let mut config = RoleBehaviorConfig::default();
-        config.click_actions.insert(
-            "head".to_owned(),
-            ClickAction::new("smile01", "f01"),
-        );
+        config
+            .click_actions
+            .insert("head".to_owned(), ClickAction::new("smile01", "f01"));
         behavior.set_config(config);
 
         let commands = behavior.on_click(ClickRegion::Head, 1.0, &ctx(1.0, &motions, &expressions));
@@ -473,7 +477,9 @@ mod tests {
         context.cursor_local = Some((380.0, 40.0));
         let commands = behavior.tick(&context, (0, 0));
         assert!(
-            commands.iter().any(|command| matches!(command, Command::SetDrag(_, _))),
+            commands
+                .iter()
+                .any(|command| matches!(command, Command::SetDrag(_, _))),
             "{commands:?}"
         );
     }
@@ -520,24 +526,15 @@ mod tests {
         behavior.on_click(ClickRegion::Head, 0.0, &ctx(0.0, &motions, &expressions));
 
         // Inside the settle window the clip is still running: hands off.
-        let commands = behavior.tick(
-            &settled_context(2.0, false, &motions, &expressions),
-            (0, 0),
-        );
+        let commands = behavior.tick(&settled_context(2.0, false, &motions, &expressions), (0, 0));
         assert!(played_motions(&commands).is_empty(), "{commands:?}");
 
         // Once it ended, the resting motion starts once.
-        let commands = behavior.tick(
-            &settled_context(3.3, true, &motions, &expressions),
-            (0, 0),
-        );
+        let commands = behavior.tick(&settled_context(3.3, true, &motions, &expressions), (0, 0));
         assert_eq!(played_motions(&commands), vec!["idle02".to_owned()]);
 
         // The 9 s fallback went with it: no restart one frame later.
-        let commands = behavior.tick(
-            &settled_context(9.2, true, &motions, &expressions),
-            (0, 0),
-        );
+        let commands = behavior.tick(&settled_context(9.2, true, &motions, &expressions), (0, 0));
         assert!(played_motions(&commands).is_empty(), "{commands:?}");
     }
 
@@ -564,11 +561,12 @@ mod tests {
         let command = behavior
             .random_motion(&ctx(0.0, &motions, &expressions), 0.0)
             .expect("a random motion");
-        assert!(matches!(command, Command::PlayMotion(_) | Command::PlayRandomMotion));
+        assert!(matches!(
+            command,
+            Command::PlayMotion(_) | Command::PlayRandomMotion
+        ));
 
         let commands = behavior.tick(&settled_context(2.1, true, &motions, &expressions), (0, 0));
         assert_eq!(played_motions(&commands), vec!["idle01".to_owned()]);
     }
 }
-
-

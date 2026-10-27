@@ -125,21 +125,48 @@ mod tests {
         assert_eq!(classify_region(0.5, 0.2, ""), ClickRegion::Head);
         assert_eq!(classify_region(0.5, 0.2, "body"), ClickRegion::Head);
         // Named non-body areas are not promoted to head.
-        assert_eq!(classify_region(0.5, 0.2, "arm"), ClickRegion::UpperBodyCenter);
+        assert_eq!(
+            classify_region(0.5, 0.2, "arm"),
+            ClickRegion::UpperBodyCenter
+        );
     }
 
     #[test]
     fn body_grid_matches_python_thresholds() {
-        assert_eq!(classify_region(0.1, 0.5, "body"), ClickRegion::UpperBodyLeft);
-        assert_eq!(classify_region(0.5, 0.5, "body"), ClickRegion::UpperBodyCenter);
-        assert_eq!(classify_region(0.9, 0.5, "body"), ClickRegion::UpperBodyRight);
-        assert_eq!(classify_region(0.1, 0.8, "body"), ClickRegion::LowerBodyLeft);
-        assert_eq!(classify_region(0.5, 0.8, "body"), ClickRegion::LowerBodyCenter);
-        assert_eq!(classify_region(0.9, 0.8, "body"), ClickRegion::LowerBodyRight);
+        assert_eq!(
+            classify_region(0.1, 0.5, "body"),
+            ClickRegion::UpperBodyLeft
+        );
+        assert_eq!(
+            classify_region(0.5, 0.5, "body"),
+            ClickRegion::UpperBodyCenter
+        );
+        assert_eq!(
+            classify_region(0.9, 0.5, "body"),
+            ClickRegion::UpperBodyRight
+        );
+        assert_eq!(
+            classify_region(0.1, 0.8, "body"),
+            ClickRegion::LowerBodyLeft
+        );
+        assert_eq!(
+            classify_region(0.5, 0.8, "body"),
+            ClickRegion::LowerBodyCenter
+        );
+        assert_eq!(
+            classify_region(0.9, 0.8, "body"),
+            ClickRegion::LowerBodyRight
+        );
         // 0.62 itself is still center (strict >).
-        assert_eq!(classify_region(0.62, 0.5, "body"), ClickRegion::UpperBodyCenter);
+        assert_eq!(
+            classify_region(0.62, 0.5, "body"),
+            ClickRegion::UpperBodyCenter
+        );
         // 0.64 itself is lower body (strict <).
-        assert_eq!(classify_region(0.5, 0.64, "body"), ClickRegion::LowerBodyCenter);
+        assert_eq!(
+            classify_region(0.5, 0.64, "body"),
+            ClickRegion::LowerBodyCenter
+        );
     }
 
     #[test]

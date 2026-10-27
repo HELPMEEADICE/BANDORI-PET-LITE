@@ -36,13 +36,7 @@ impl AmbientKind {
                 &["sleep", "akubi", "sigh", "sad", "idle02"]
             }
             AmbientKind::Daze => &[
-                "stare",
-                "mitore",
-                "thinking",
-                "eeto",
-                "odoodo",
-                "nf",
-                "idle02",
+                "stare", "mitore", "thinking", "eeto", "odoodo", "nf", "idle02",
             ],
             AmbientKind::Random | AmbientKind::None => &[],
         }
@@ -170,7 +164,12 @@ impl IdlePlanner {
             let motion = self.first_tagged_motion(kind.motion_tags(), ctx, rng);
             let expression = self.first_tagged_expression(kind.expression_tags(), ctx);
             self.last_ambient_at = ctx.now;
-            trace!(kind = kind.key(), ?motion, ?expression, "context idle action");
+            trace!(
+                kind = kind.key(),
+                ?motion,
+                ?expression,
+                "context idle action"
+            );
             return Some(AmbientPlan {
                 motion,
                 expression,
@@ -202,9 +201,7 @@ impl IdlePlanner {
                 })
                 .cloned()
         });
-        if motion.is_none() {
-            return None;
-        }
+        motion.as_ref()?;
         self.last_ambient_at = ctx.now;
         Some(AmbientPlan {
             motion,
@@ -311,20 +308,41 @@ mod tests {
         let mut planner = IdlePlanner::default();
         let mut rng = Rng::seeded(4);
         // First tick only arms the timer.
-        assert!(planner.tick(&context(0.0, 10.0, 12, &motions, &expressions), &mut rng, true, true).is_none());
+        assert!(planner
+            .tick(
+                &context(0.0, 10.0, 12, &motions, &expressions),
+                &mut rng,
+                true,
+                true
+            )
+            .is_none());
         let plan = planner
-            .tick(&context(6.0, 10.0, 12, &motions, &expressions), &mut rng, true, true)
+            .tick(
+                &context(6.0, 10.0, 12, &motions, &expressions),
+                &mut rng,
+                true,
+                true,
+            )
             .expect("a random motion");
         assert_eq!(plan.kind, AmbientKind::Random);
         // Within the 180 s cooldown nothing else fires.
         assert!(planner
-            .tick(&context(20.0, 10.0, 12, &motions, &expressions), &mut rng, true, true)
+            .tick(
+                &context(20.0, 10.0, 12, &motions, &expressions),
+                &mut rng,
+                true,
+                true
+            )
             .is_none());
         // After the cooldown a daze action is possible.
         let plan = planner
-            .tick(&context(200.0, 600.0, 12, &motions, &expressions), &mut rng, true, true)
+            .tick(
+                &context(200.0, 600.0, 12, &motions, &expressions),
+                &mut rng,
+                true,
+                true,
+            )
             .expect("daze action");
         assert_eq!(plan.kind, AmbientKind::Daze);
     }
 }
-

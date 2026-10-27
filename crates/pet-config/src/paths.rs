@@ -133,4 +133,3 @@ mod tests {
         assert!(paths.cache().ends_with("BandoriPetLite/cache"));
     }
 }
-

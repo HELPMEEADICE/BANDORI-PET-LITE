@@ -26,10 +26,12 @@ impl ApplicationHandler for Comparison {
             ModelEntry::new("anon", "school_winter_hs_1st",
             "models/anon.zst::school_winter_hs_1st/adv_live2d_anon_002_school_winter_hs_1st.model3.json",
             ModelFormat::Moc3)];
-        let mut config = Config::default();
         // Uncap all runs to expose any throughput loss; no config is saved.
-        config.vsync = false;
-        config.emotion_behavior_enabled = false;
+        let config = Config {
+            vsync: false,
+            emotion_behavior_enabled: false,
+            ..Default::default()
+        };
         for entry in entries {
             for (label, memory_hints, preferred_backend) in [
                 ("all/performance", wgpu::MemoryHints::Performance, false),
@@ -55,14 +57,14 @@ impl ApplicationHandler for Comparison {
                             ..Default::default()
                         }))
                         .unwrap();
-                    let gpu = Arc::new(Gpu {
+
+                    Arc::new(Gpu {
                         instance,
                         adapter,
                         device,
                         queue,
                         adapter_info,
-                    });
-                    gpu
+                    })
                 };
                 let mut role =
                     Role::create(event_loop, &entry, &config, &paths, &cache, Some(gpu)).unwrap();

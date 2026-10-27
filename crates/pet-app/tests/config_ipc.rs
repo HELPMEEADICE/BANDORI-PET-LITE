@@ -66,8 +66,10 @@ fn append(
 fn settings_patch_is_persisted_by_the_pet_process() {
     let root = temp_root("patch");
     let paths = Paths::with_root(&root);
-    let mut config = Config::default();
-    config.fps = 120;
+    let config = Config {
+        fps: 120,
+        ..Default::default()
+    };
     pet_config::save_config(&paths.config(), &config).unwrap();
 
     let mut app = PetApp::new_with(paths.clone(), &session("patch"), false).expect("pet app");

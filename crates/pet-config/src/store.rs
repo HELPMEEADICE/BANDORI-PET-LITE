@@ -381,9 +381,11 @@ mod tests {
     fn save_then_load_round_trips() {
         let dir = temp_dir("roundtrip");
         let path = dir.join("config.json");
-        let mut config = Config::default();
-        config.fps = 90;
-        config.dark_theme = DarkTheme::On;
+        let mut config = Config {
+            fps: 90,
+            dark_theme: DarkTheme::On,
+            ..Default::default()
+        };
         config
             .click_motion_actions
             .insert("head".to_owned(), ClickAction::new("smile01", "smile01"));
@@ -406,10 +408,12 @@ mod tests {
 
     #[test]
     fn sanitize_clamps_out_of_range_values() {
-        let mut config = Config::default();
-        config.fps = 5000;
-        config.opacity = 0.05;
-        config.live2d_scale = 9000;
+        let mut config = Config {
+            fps: 5000,
+            opacity: 0.05,
+            live2d_scale: 9000,
+            ..Default::default()
+        };
         let warnings = sanitize(&mut config);
         assert_eq!(config.fps, 240);
         assert!((config.opacity - 0.2).abs() < f32::EPSILON);

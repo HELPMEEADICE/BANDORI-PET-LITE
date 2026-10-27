@@ -37,7 +37,11 @@ impl HeadTracker {
     }
 
     /// Tracks a cursor position given in this window's local pixel space.
-    pub fn track_local(&mut self, ctx: &BehaviorContext<'_>, cursor: (f32, f32)) -> Option<(f32, f32)> {
+    pub fn track_local(
+        &mut self,
+        ctx: &BehaviorContext<'_>,
+        cursor: (f32, f32),
+    ) -> Option<(f32, f32)> {
         let (width, height) = (ctx.surface.0 as f32, ctx.surface.1 as f32);
         if width <= 0.0 || height <= 0.0 {
             return None;
@@ -216,7 +220,10 @@ mod tests {
         let mut tracker = HeadTracker::default();
         let far = tracker.track_local(&ctx, (30_000.0, 250.0)).unwrap();
         assert!((near.0 - 0.5).abs() < 1e-6, "{near:?}");
-        assert!((far.0 - 1.0).abs() < 1e-6, "projected then clamped: {far:?}");
+        assert!(
+            (far.0 - 1.0).abs() < 1e-6,
+            "projected then clamped: {far:?}"
+        );
     }
 
     #[test]
@@ -236,4 +243,3 @@ mod tests {
         assert_eq!(tracker.drag(), (0.0, 0.0));
     }
 }
-

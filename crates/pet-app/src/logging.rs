@@ -10,7 +10,10 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
 /// Initialises logging. Returns the file-appender guard which must stay alive.
-pub fn init(log_dir: &Path, default_level: &str) -> Option<tracing_appender::non_blocking::WorkerGuard> {
+pub fn init(
+    log_dir: &Path,
+    default_level: &str,
+) -> Option<tracing_appender::non_blocking::WorkerGuard> {
     let filter = EnvFilter::try_from_default_env()
         .or_else(|_| EnvFilter::try_new(default_level))
         .unwrap_or_else(|_| EnvFilter::new("info"));

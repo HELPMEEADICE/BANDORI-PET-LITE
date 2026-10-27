@@ -13,5 +13,5 @@ pub mod single_instance;
 pub mod tray;
 pub mod ui_process;
 
-pub use app::{PetApp, AppResult};
+pub use app::{AppResult, PetApp};
 pub use role::{Role, RoleError};

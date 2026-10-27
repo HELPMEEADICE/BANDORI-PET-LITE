@@ -22,7 +22,9 @@ pub use config::{
 };
 pub use patch::{apply_level_for, ApplyLevel, SettingsPatch};
 pub use paths::{about_lines, Paths};
-pub use presets::{preset, preset_names, is_builtin_name, Preset, PresetMode, PRESET_NAMES, PRESETS};
+pub use presets::{
+    is_builtin_name, preset, preset_names, Preset, PresetMode, PRESETS, PRESET_NAMES,
+};
 pub use store::{apply_patch, load_config, save_config, ConfigError, LoadOutcome, SaveOutcome};
 
 /// Range-clamp helpers shared by validation and the settings UI.
@@ -46,5 +48,3 @@ pub mod bounds {
     /// Alpha threshold used by CPU hit testing (0–255).
     pub const HIT_ALPHA_MAX: u8 = 255;
 }
-
-

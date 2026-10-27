@@ -3,8 +3,8 @@
 use std::sync::mpsc::Sender;
 
 use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
-use tray_icon::{Icon, MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tracing::{debug, warn};
+use tray_icon::{Icon, MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 /// Menu actions surfaced to the app.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -45,7 +45,10 @@ impl Tray {
         for percent in [100, 80, 60, 40, 20] {
             let item = MenuItem::new(format!("{percent}%"), true, None);
             opacity_menu.append(&item)?;
-            opacity_items.push((item.id().clone(), TrayEvent::Opacity(percent as f32 / 100.0)));
+            opacity_items.push((
+                item.id().clone(),
+                TrayEvent::Opacity(percent as f32 / 100.0),
+            ));
         }
 
         menu.append(&show_hide)?;
@@ -81,7 +84,13 @@ impl Tray {
     pub fn poll(&mut self) {
         while let Ok(event) = TrayIconEvent::receiver().try_recv() {
             if event.id() == self._icon.id()
-                && matches!(event, TrayIconEvent::DoubleClick { button: MouseButton::Left, .. })
+                && matches!(
+                    event,
+                    TrayIconEvent::DoubleClick {
+                        button: MouseButton::Left,
+                        ..
+                    }
+                )
             {
                 let _ = self.sender.send(TrayEvent::OpenSettings);
             }
@@ -120,4 +129,3 @@ fn build_icon() -> Result<Icon, Box<dyn std::error::Error>> {
         Box::new(error) as Box<dyn std::error::Error>
     })
 }
-

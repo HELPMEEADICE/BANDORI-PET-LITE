@@ -44,22 +44,17 @@ pub fn auto_buckets(region: ClickRegion) -> (&'static [&'static str], &'static [
             &["surprised", "shame", "pui", "smile"],
             &["kandou", "kime", "nf"],
         ),
-        ClickRegion::UpperBodyLeft | ClickRegion::LowerBodyLeft => (
-            &["nf_left", "nnf_left"],
-            &["shame", "surprised", "smile"],
-        ),
-        ClickRegion::UpperBodyRight | ClickRegion::LowerBodyRight => (
-            &["nf_right", "nnf_right"],
-            &["shame", "surprised", "smile"],
-        ),
+        ClickRegion::UpperBodyLeft | ClickRegion::LowerBodyLeft => {
+            (&["nf_left", "nnf_left"], &["shame", "surprised", "smile"])
+        }
+        ClickRegion::UpperBodyRight | ClickRegion::LowerBodyRight => {
+            (&["nf_right", "nnf_right"], &["shame", "surprised", "smile"])
+        }
         ClickRegion::UpperBodyCenter => (
             &["smile", "kime", "surprised", "shame"],
             &["angry", "pui", "nf"],
         ),
-        ClickRegion::LowerBodyCenter => (
-            &["shame", "surprised", "angry"],
-            &["smile", "kime"],
-        ),
+        ClickRegion::LowerBodyCenter => (&["shame", "surprised", "angry"], &["smile", "kime"]),
     }
 }
 
@@ -174,7 +169,11 @@ pub fn resolve_motion_pool(tag: &str, motion_names: &[String], char_name: &str) 
 }
 
 /// Resolves a tag to an expression name (deterministic, first match wins).
-pub fn resolve_expression_by_tag(tag: &str, expression_names: &[String], char_name: &str) -> String {
+pub fn resolve_expression_by_tag(
+    tag: &str,
+    expression_names: &[String],
+    char_name: &str,
+) -> String {
     let tag_low = tag.to_ascii_lowercase();
     if tag_low.is_empty() || expression_names.is_empty() {
         return String::new();
@@ -326,7 +325,10 @@ pub fn resolve_preset(
                 }
                 let motion = resolve_motion_by_tag(tag, motion_names, char_name, rng);
                 let expression = resolve_expression_by_tag(tag, expression_names, char_name);
-                actions.insert(region.key().to_owned(), ClickAction::new(motion, expression));
+                actions.insert(
+                    region.key().to_owned(),
+                    ClickAction::new(motion, expression),
+                );
             }
         }
     }
@@ -358,7 +360,10 @@ mod tests {
         let mut rng = Rng::seeded(1);
         for _ in 0..20 {
             let name = resolve_motion_by_tag("smile", &motions, "kasumi", &mut rng);
-            assert!(name.starts_with("smile") || name.contains("smile"), "{name}");
+            assert!(
+                name.starts_with("smile") || name.contains("smile"),
+                "{name}"
+            );
         }
         let pool = resolve_motion_pool("smile", &motions, "kasumi");
         assert!(pool.contains(&"mtn_smile03_C".to_owned()));
@@ -376,7 +381,10 @@ mod tests {
     fn unknown_tag_yields_empty_motion() {
         let motions = names(&["smile01"]);
         let mut rng = Rng::seeded(2);
-        assert_eq!(resolve_motion_by_tag("pui", &motions, "kasumi", &mut rng), "");
+        assert_eq!(
+            resolve_motion_by_tag("pui", &motions, "kasumi", &mut rng),
+            ""
+        );
     }
 
     #[test]
@@ -390,15 +398,27 @@ mod tests {
     fn expression_resolution_falls_back_to_first_name() {
         // Bandori moc packs name expressions f01..f18: every tag yields f01.
         let expressions = names(&["f01", "f02", "f03"]);
-        assert_eq!(resolve_expression_by_tag("smile", &expressions, "kasumi"), "f01");
-        assert_eq!(resolve_expression_by_tag("shame", &expressions, "kasumi"), "f01");
+        assert_eq!(
+            resolve_expression_by_tag("smile", &expressions, "kasumi"),
+            "f01"
+        );
+        assert_eq!(
+            resolve_expression_by_tag("shame", &expressions, "kasumi"),
+            "f01"
+        );
     }
 
     #[test]
     fn expression_resolution_prefers_matching_names() {
         let expressions = names(&["angry01", "smile01", "default"]);
-        assert_eq!(resolve_expression_by_tag("angry", &expressions, ""), "angry01");
-        assert_eq!(resolve_expression_by_tag("sad", &expressions, ""), "default");
+        assert_eq!(
+            resolve_expression_by_tag("angry", &expressions, ""),
+            "angry01"
+        );
+        assert_eq!(
+            resolve_expression_by_tag("sad", &expressions, ""),
+            "default"
+        );
         let zero_shot = names(&["sad01", "cry01", "smile01"]);
         assert_eq!(resolve_expression_by_tag("sad", &zero_shot, ""), "sad01");
     }
@@ -442,7 +462,14 @@ mod tests {
         let mut rng = Rng::seeded(3);
         let action = ClickAction::new(ClickAction::NONE, "f01");
         assert_eq!(
-            resolve_click_action(ClickRegion::Head, &action, &motions, &expressions, "kasumi", &mut rng),
+            resolve_click_action(
+                ClickRegion::Head,
+                &action,
+                &motions,
+                &expressions,
+                "kasumi",
+                &mut rng
+            ),
             None
         );
     }

@@ -20,7 +20,7 @@ use std::path::Path;
 pub use blink::{BlinkBreath, BlinkOutput};
 pub use moc2::Moc2Adapter;
 pub use moc3::Moc3Adapter;
-pub use transition::{DEFAULT_POSE_FADE_SECONDS, PoseTransition};
+pub use transition::{PoseTransition, DEFAULT_POSE_FADE_SECONDS};
 
 use neocari::assets::DecodedTexture;
 use neocari::moc3::Moc3DrawableMesh;
@@ -85,6 +85,8 @@ impl ModelInfo {
 }
 
 /// A loaded, animatable model of either Cubism generation.
+// Keep the adapters inline; loading a model should not require another allocation.
+#[allow(clippy::large_enum_variant)]
 pub enum ModelHandle {
     /// Cubism 2.1 `.moc` runtime.
     Moc2(Moc2Adapter),

@@ -45,7 +45,10 @@ impl ModelPath {
     }
 
     /// Builds a model path from its parts.
-    pub fn new(archive: impl Into<String>, member: impl AsRef<str>) -> Result<Self, VirtualPathError> {
+    pub fn new(
+        archive: impl Into<String>,
+        member: impl AsRef<str>,
+    ) -> Result<Self, VirtualPathError> {
         Ok(Self {
             archive: archive.into(),
             member: normalize_member(member.as_ref())?,
@@ -59,7 +62,10 @@ impl ModelPath {
 
     /// Costume directory: the first member segment.
     pub fn costume(&self) -> Option<&str> {
-        self.member.split('/').next().filter(|part| !part.is_empty())
+        self.member
+            .split('/')
+            .next()
+            .filter(|part| !part.is_empty())
     }
 
     /// Resolves the archive against the installation root.
@@ -152,8 +158,7 @@ mod tests {
 
     #[test]
     fn normalizes_windows_separators() {
-        let path =
-            ModelPath::parse("models\\kasumi.zst::live_default\\data\\model.moc").unwrap();
+        let path = ModelPath::parse("models\\kasumi.zst::live_default\\data\\model.moc").unwrap();
         assert_eq!(path.member, "live_default/data/model.moc");
     }
 }

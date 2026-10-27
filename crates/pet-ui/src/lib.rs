@@ -3,9 +3,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+mod downloads;
 mod picker;
 mod preview;
-mod downloads;
 mod radial;
 #[cfg(test)]
 use radial::items_to_slint;
@@ -98,7 +98,11 @@ pub fn run(pipe: &str, paths: &Paths) -> Result<(), UiError> {
     picker.wire(&window);
     picker.refresh(&window);
     let downloads = downloads::Downloads::new(
-        paths, &index, Rc::clone(&catalog), Rc::clone(&picker), Rc::clone(&send),
+        paths,
+        &index,
+        Rc::clone(&catalog),
+        Rc::clone(&picker),
+        Rc::clone(&send),
     )?;
     downloads.wire(&window);
     downloads.refresh(&window);
@@ -494,21 +498,16 @@ fn spawn_client(
                 }
             }
             let _ = connection.send(&Message::RequestSnapshot);
-            loop {
-                match connection.recv() {
-                    Ok(Some(message)) => {
-                        let quit = matches!(message, Message::Quit);
-                        if messages.send(message).is_err() {
-                            return;
-                        }
-                        if quit {
-                            if let Ok(mut guard) = writer.lock() {
-                                *guard = None;
-                            }
-                            return;
-                        }
+            while let Ok(Some(message)) = connection.recv() {
+                let quit = matches!(message, Message::Quit);
+                if messages.send(message).is_err() {
+                    return;
+                }
+                if quit {
+                    if let Ok(mut guard) = writer.lock() {
+                        *guard = None;
                     }
-                    Ok(None) | Err(_) => break,
+                    return;
                 }
             }
             if let Ok(mut guard) = writer.lock() {
@@ -862,23 +861,25 @@ mod tests {
         })))
         .unwrap();
         let window = SettingsWindow::new().unwrap();
-        let mut config = Config::default();
-        config.models = vec![
-            pet_config::ModelEntry::new(
-                "kasumi",
-                "live",
-                "models/kasumi.zst::live/model.json",
-                pet_config::ModelFormat::Moc,
-            ),
-            pet_config::ModelEntry::new(
-                "anon",
-                "school",
-                "models/anon.zst::school/model3.json",
-                pet_config::ModelFormat::Moc3,
-            ),
-        ];
-        config.character = "anon".into();
-        config.costume = "school".into();
+        let config = Config {
+            models: vec![
+                pet_config::ModelEntry::new(
+                    "kasumi",
+                    "live",
+                    "models/kasumi.zst::live/model.json",
+                    pet_config::ModelFormat::Moc,
+                ),
+                pet_config::ModelEntry::new(
+                    "anon",
+                    "school",
+                    "models/anon.zst::school/model3.json",
+                    pet_config::ModelFormat::Moc3,
+                ),
+            ],
+            character: "anon".into(),
+            costume: "school".into(),
+            ..Default::default()
+        };
         apply_config_to_window(
             &window,
             &config,

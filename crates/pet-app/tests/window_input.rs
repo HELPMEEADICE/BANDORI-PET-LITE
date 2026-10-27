@@ -83,13 +83,15 @@ impl ApplicationHandler for Scenario {
         let foreground = unsafe { GetForegroundWindow() };
         let mut gpu = None;
         for (character, costume) in [("kasumi", "live_default"), ("anon", "casual_spring_01")] {
-            let mut config = Config::default();
-            config.live2d_scale = 50;
-            config.drag_locked = false;
-            config.emotion_behavior_enabled = false;
-            config.live2d_head_tracking_enabled = true;
-            config.live2d_mutual_gaze_enabled = false;
-            config.hide_live2d_model = character == "anon";
+            let mut config = Config {
+                live2d_scale: 50,
+                drag_locked: false,
+                emotion_behavior_enabled: false,
+                live2d_head_tracking_enabled: true,
+                live2d_mutual_gaze_enabled: false,
+                hide_live2d_model: character == "anon",
+                ..Default::default()
+            };
             let entry = pet_app::role::entry_for_selection(
                 character,
                 catalog.find(character, costume).unwrap(),

@@ -186,8 +186,15 @@ mod tests {
 
     #[test]
     fn every_tag_preset_covers_all_seven_regions() {
-        for preset in PRESETS.iter().filter(|preset| preset.mode == PresetMode::Tags) {
-            assert!(preset.covers_every_region(), "{} misses a region", preset.name);
+        for preset in PRESETS
+            .iter()
+            .filter(|preset| preset.mode == PresetMode::Tags)
+        {
+            assert!(
+                preset.covers_every_region(),
+                "{} misses a region",
+                preset.name
+            );
         }
     }
 

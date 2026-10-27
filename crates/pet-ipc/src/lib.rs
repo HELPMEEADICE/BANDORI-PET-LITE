@@ -167,9 +167,7 @@ pub enum Message {
     /// ui → pet: open the model folder in Explorer.
     OpenModelFolder,
     /// ui → pet: packages were installed; invalidate catalog and reload these roles.
-    ModelsChanged {
-        characters: Vec<String>,
-    },
+    ModelsChanged { characters: Vec<String> },
     /// ui → pet: the settings window was hidden.
     SettingsClosed,
     /// ui → pet: quit.

@@ -141,7 +141,6 @@ impl Role {
         stored.height = height;
         let decision =
             placement::resolve_position(&stored, (width, height), &monitors, primary.as_ref());
-        let mut stored = stored;
         stored.x = decision.x;
         stored.y = decision.y;
         if let Some(monitor) = decision.monitor.as_ref() {
