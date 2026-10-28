@@ -298,7 +298,20 @@ jobs:
           ln -s /Applications "$RUNNER_TEMP/dmg-$ARCH/Applications"
           hdiutil create -volname BANDORI-PET-LITE -srcfolder "$RUNNER_TEMP/dmg-$ARCH" \
             -ov -format UDZO "$output/packages/$name.dmg"
-          hdiutil verify "$output/packages/$name.dmg"
+          # DiskImages can briefly keep a newly created image busy on macOS runners.
+          verify_log="$RUNNER_TEMP/dmg-verify-$ARCH.log"
+          for attempt in 1 2 3 4 5; do
+            if LC_ALL=C hdiutil verify "$output/packages/$name.dmg" >"$verify_log" 2>&1; then
+              cat "$verify_log"
+              break
+            fi
+            cat "$verify_log" >&2
+            if ! grep -qF 'Resource temporarily unavailable' "$verify_log" || [[ "$attempt" == 5 ]]; then
+              exit 1
+            fi
+            echo "DMG verification temporarily unavailable; retrying after $((attempt * 2)) seconds..." >&2
+            sleep "$((attempt * 2))"
+          done
       - name: Upload ZIP package
         uses: actions/upload-artifact@v7
         with:
