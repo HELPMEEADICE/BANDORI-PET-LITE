@@ -1,5 +1,4 @@
 import {
-    ComboBox,
     LineEdit,
     ListView,
     ScrollView,
@@ -690,11 +689,11 @@ export component SettingsWindow inherits Window {
                                                 width: 110px;
                                             }
 
-                                            ComboBox {
+                                            SelectField {
                                                 model: root.quality-labels;
-                                                current-index: root.quality;
+                                                current-index <=> root.quality;
                                                 width: 160px;
-                                                selected => { root.patch-string("live2d_quality", self.current-index == 1 ? "balanced" : "performance"); }
+                                                selected(index) => { root.patch-string("live2d_quality", index == 1 ? "balanced" : "performance"); }
                                             }
 
                                             Hint {
@@ -914,7 +913,7 @@ export component SettingsWindow inherits Window {
                                                 width: 130px;
                                             }
 
-                                            ComboBox {
+                                            SelectField {
                                                 model: root.preset-labels;
                                                 current-index <=> root.preset-index;
                                             }
@@ -952,18 +951,18 @@ export component SettingsWindow inherits Window {
                                                 width: 130px;
                                             }
 
-                                            ComboBox {
+                                            SelectField {
                                                 model: root.motion-options;
                                                 current-index: row.motion-index;
                                                 enabled: root.has-model;
-                                                selected => { root.edit-region(index, "motion", self.current-index); }
+                                                selected(choice) => { root.edit-region(index, "motion", choice); }
                                             }
 
-                                            ComboBox {
+                                            SelectField {
                                                 model: root.expression-options;
                                                 current-index: row.expression-index;
                                                 enabled: root.has-model;
-                                                selected => { root.edit-region(index, "expression", self.current-index); }
+                                                selected(choice) => { root.edit-region(index, "expression", choice); }
                                             }
                                         }
                                     }

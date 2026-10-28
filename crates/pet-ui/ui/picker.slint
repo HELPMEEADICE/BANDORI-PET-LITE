@@ -1,4 +1,4 @@
-import { ComboBox, LineEdit, ListView } from "std-widgets.slint";
+import { LineEdit, ListView } from "std-widgets.slint";
 import {
     Colors,
     Motion,
@@ -6,6 +6,7 @@ import {
     Body,
     Hint,
     ActionButton,
+    SelectField,
 } from "components.slint";
 import { Texts } from "texts.slint";
 
@@ -147,13 +148,13 @@ export component ModelPicker inherits Rectangle {
                 horizontal-stretch: 1;
                 edited => { root.refresh(); }
             }
-            ComboBox {
+            SelectField {
                 width: 140px;
                 model: root.filter-labels;
                 current-index: root.stage == 2 ? root.costume-filter : root.character-filter;
-                selected(value) => {
-                    if root.stage == 2 { root.costume-filter = self.current-index; }
-                    else { root.character-filter = self.current-index; }
+                selected(choice) => {
+                    if root.stage == 2 { root.costume-filter = choice; }
+                    else { root.character-filter = choice; }
                     root.refresh();
                 }
             }
