@@ -16,7 +16,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   # Optimize installer binaries for size without changing local release builds.
-  CARGO_PROFILE_RELEASE_OPT_LEVEL: "z"
+  CARGO_PROFILE_RELEASE_OPT_LEVEL: "s"
   CARGO_PROFILE_RELEASE_LTO: "fat"
   CARGO_PROFILE_RELEASE_PANIC: "abort"
   CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1"
