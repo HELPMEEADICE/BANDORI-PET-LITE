@@ -18,6 +18,10 @@ env:
   # Optimize installer binaries for size without changing local release builds.
   CARGO_PROFILE_RELEASE_OPT_LEVEL: "z"
   CARGO_PROFILE_RELEASE_LTO: "fat"
+  CARGO_PROFILE_RELEASE_PANIC: "abort"
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_STRIP: "debuginfo"
   RUST_BACKTRACE: 1
 
 jobs:
