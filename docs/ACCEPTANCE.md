@@ -60,7 +60,7 @@ $env:BANDORI_PET_ROOT = "$PWD\run"; $env:RUST_LOG = "info,pet_app=debug"
 * 冷启动/热重载耗时：看日志 `role ready ms=…`。
 * 透明与绘制：宠物运行前后对同一屏幕矩形各截一张图做像素差（四角应为 0，模型区域应显著变化）。
 * 穿透：`GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & 0x20` 随光标在模型/透明区移动而切换。
-* 位置持久化：拖动后等 2s 让防抖落盘，读 `config.json` 的 `models[0].window_placement`，重启后看日志 `decision=Absolute`。
+* 位置持久化：拖动松手后立即读 `config.json` 的 `models[0].window_placement`，重启后看日志 `decision=Absolute` 并核对坐标。覆盖透明留白越过屏幕边缘、窗口高于屏幕、负坐标副屏；仍与任一屏幕相交时应原位恢复，完全离屏时应回到可见范围。
 
 
 ## 修复记录

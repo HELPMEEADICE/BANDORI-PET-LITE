@@ -182,9 +182,9 @@ impl Default for Placement {
 }
 
 impl Placement {
-    /// `true` when the placement still carries the "never positioned" sentinel.
+    /// `true` when no position or monitor fingerprint has been recorded yet.
     pub fn is_unset(&self) -> bool {
-        self.x == -1 && self.y == -1
+        self.x == -1 && self.y == -1 && self.screen_name.is_empty()
     }
 
     /// Width / height of the stored work area.
@@ -586,6 +586,18 @@ mod tests {
         let json = serde_json::to_string_pretty(&config).expect("serialize");
         let back: Config = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(config, back);
+    }
+
+    #[test]
+    fn recorded_negative_coordinates_are_not_the_unset_sentinel() {
+        assert!(Placement::default().is_unset());
+        let placement = Placement {
+            x: -1,
+            y: -1,
+            screen_name: "primary".to_owned(),
+            ..Placement::default()
+        };
+        assert!(!placement.is_unset());
     }
 
     #[test]

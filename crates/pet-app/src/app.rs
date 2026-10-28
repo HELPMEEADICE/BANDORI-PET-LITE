@@ -932,7 +932,7 @@ impl ApplicationHandler for PetApp {
                     }
                     ElementState::Released => {
                         let cursor = role.cursor_local().unwrap_or((0.0, 0.0));
-                        let (moved, delta) = role.on_left_release();
+                        let (moved, _) = role.on_left_release();
                         if !moved {
                             let now = interaction_time;
                             let region = role.region_at(cursor);
@@ -958,13 +958,15 @@ impl ApplicationHandler for PetApp {
                                 role.apply_external_command(&command);
                             }
                             self.config_dirty = true;
-                        } else if delta.0.abs() + delta.1.abs() > 0.0 {
-                            self.config_dirty = true;
+                        } else {
                             if self.config.move_all_roles_together {
                                 for peer in &mut self.roles {
                                     peer.record_placement();
                                 }
                             }
+                            // A completed drag must survive an immediate restart
+                            // or forced shutdown, without waiting for autosave.
+                            self.persist_now();
                         }
                         self.drag_peer = None;
                     }

@@ -223,12 +223,29 @@ pub fn resolve_position(
                 placement.screen_name.is_empty() || monitor.geometry == placement.screen_geometry;
             if same_geometry {
                 let work = monitor.work;
-                let x = clamp(placement.x, work[0], work[0] + work[2] - width.min(work[2]));
-                let y = clamp(
-                    placement.y,
-                    work[1],
-                    work[1] + work[3] - height.min(work[3]),
-                );
+                // A pet's transparent animation viewport may extend beyond the
+                // screen, or even be taller than it. Preserve the user's exact
+                // position while any part of the window remains on a monitor;
+                // clamping the whole viewport makes pets jump after a restart.
+                let visible = monitors.iter().any(|monitor| {
+                    let [x, y, w, h] = monitor.geometry.map(i64::from);
+                    i64::from(placement.x) < x + w
+                        && i64::from(placement.x) + i64::from(size.0) > x
+                        && i64::from(placement.y) < y + h
+                        && i64::from(placement.y) + i64::from(size.1) > y
+                });
+                let (x, y) = if visible {
+                    (placement.x, placement.y)
+                } else {
+                    (
+                        clamp(placement.x, work[0], work[0] + work[2] - width.min(work[2])),
+                        clamp(
+                            placement.y,
+                            work[1],
+                            work[1] + work[3] - height.min(work[3]),
+                        ),
+                    )
+                };
                 ResolvedPosition {
                     x,
                     y,
@@ -695,6 +712,68 @@ mod tests {
         );
         assert_eq!(resolved.decision, PositionDecision::Absolute);
         assert_eq!((resolved.x, resolved.y), (100, 200));
+    }
+
+    #[test]
+    fn saved_positions_survive_viewports_extending_beyond_the_screen() {
+        let primary = monitor("primary", [0, 0, 2560, 1600], [0, 0, 2560, 1540]);
+        for rect in [
+            (-1, -1, 700, 900),
+            (-120, 200, 700, 900),
+            (2200, 1000, 700, 900),
+            (1100, -400, 1395, 2064),
+            (1100, 250, 1395, 2064),
+            (200, 950, 500, 625),
+        ] {
+            let stored = record_placement(rect, 1.5, &primary);
+            let resolved = resolve_position(
+                &stored,
+                (rect.2, rect.3),
+                std::slice::from_ref(&primary),
+                Some(&primary),
+            );
+            assert_eq!(resolved.decision, PositionDecision::Absolute);
+            assert_eq!((resolved.x, resolved.y), (rect.0, rect.1), "{rect:?}");
+        }
+    }
+
+    #[test]
+    fn negative_coordinates_on_a_secondary_monitor_survive_a_restart() {
+        let primary = monitor("primary", [0, 0, 1920, 1080], [0, 0, 1920, 1040]);
+        let secondary = monitor(
+            "secondary",
+            [-1920, -1080, 1920, 1080],
+            [-1920, -1080, 1920, 1040],
+        );
+        let stored = record_placement((-2020, -1180, 700, 900), 1.0, &secondary);
+        let resolved = resolve_position(
+            &stored,
+            (700, 900),
+            &[primary.clone(), secondary],
+            Some(&primary),
+        );
+        assert_eq!(resolved.decision, PositionDecision::Absolute);
+        assert_eq!((resolved.x, resolved.y), (-2020, -1180));
+    }
+
+    #[test]
+    fn completely_offscreen_saved_positions_are_recovered() {
+        let primary = monitor("primary", [0, 0, 1920, 1080], [0, 0, 1920, 1040]);
+        for (x, y, expected) in [
+            (-600, 200, (0, 200)),
+            (1920, 200, (1420, 200)),
+            (100, -625, (100, 0)),
+            (100, 1080, (100, 415)),
+        ] {
+            let stored = record_placement((x, y, 500, 625), 1.0, &primary);
+            let resolved = resolve_position(
+                &stored,
+                (500, 625),
+                std::slice::from_ref(&primary),
+                Some(&primary),
+            );
+            assert_eq!((resolved.x, resolved.y), expected);
+        }
     }
 
     #[test]
