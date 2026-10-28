@@ -195,7 +195,7 @@ export component SettingsWindow inherits Window {
                         }
                     }
 
-                    NavButton {
+                    characters-nav := NavButton {
                         text: root.t.nav-characters;
                         icon: @image-url("icons/characters.svg");
                         tint: #ff568e;
@@ -203,7 +203,7 @@ export component SettingsWindow inherits Window {
                         clicked => { root.page = 0; }
                     }
 
-                    NavButton {
+                    behavior-nav := NavButton {
                         text: root.t.nav-behavior;
                         icon: @image-url("icons/behavior.svg");
                         tint: #ff902c;
@@ -211,7 +211,7 @@ export component SettingsWindow inherits Window {
                         clicked => { root.page = 2; }
                     }
 
-                    NavButton {
+                    display-nav := NavButton {
                         text: root.t.nav-display;
                         icon: @image-url("icons/display.svg");
                         tint: #00d976;
@@ -219,7 +219,7 @@ export component SettingsWindow inherits Window {
                         clicked => { root.page = 1; }
                     }
 
-                    NavButton {
+                    downloads-nav := NavButton {
                         text: root.t.nav-downloads;
                         icon: @image-url("icons/download.svg");
                         tint: #4a9eff;
@@ -232,12 +232,30 @@ export component SettingsWindow inherits Window {
                         background: transparent;
                     }
 
-                    NavButton {
+                    about-nav := NavButton {
                         text: root.t.nav-about;
                         icon: @image-url("icons/about.svg");
                         tint: #a7b0bf;
                         active: root.page == 3;
                         clicked => { root.page = 3; }
+                    }
+                }
+
+                // Keep one indicator alive so selection changes slide it between buttons.
+                Rectangle {
+                    x: characters-nav.x - self.width;
+                    y: (root.page == 2 ? behavior-nav.y + behavior-nav.height / 2
+                        : root.page == 1 ? display-nav.y + display-nav.height / 2
+                        : root.page == 4 ? downloads-nav.y + downloads-nav.height / 2
+                        : root.page == 3 ? about-nav.y + about-nav.height / 2
+                        : characters-nav.y + characters-nav.height / 2) - self.height / 2;
+                    width: 4px;
+                    height: 27px;
+                    border-radius: 2px;
+                    background: Colors.accent;
+                    animate y {
+                        duration: Motion.selection;
+                        easing: ease-out;
                     }
                 }
             }

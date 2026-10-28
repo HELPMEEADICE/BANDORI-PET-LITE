@@ -244,20 +244,6 @@ export component NavButton inherits Rectangle {
     accessible-label: text;
     accessible-action-default => { root.clicked(); }
     Rectangle {
-        x: -4px;
-        y: (parent.height - self.height) / 2;
-        width: 4px;
-        height: root.active ? 27px : 8px;
-        opacity: root.active ? 1 : 0;
-        border-radius: 2px;
-        background: Colors.accent;
-        animate height, opacity {
-            duration: Motion.selection;
-            easing: ease-out;
-        }
-    }
-
-    Rectangle {
         x: 10px;
         y: (parent.height - self.height) / 2;
         width: 29px;
