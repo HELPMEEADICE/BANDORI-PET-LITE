@@ -13,7 +13,10 @@
 //! * window opacity without `WS_EX_LAYERED` colour-key hacks,
 //! * a place to pre-multiply if a machine only offers `PostMultiplied` surfaces.
 
+mod overlay;
+
 use std::sync::Arc;
+use std::time::Instant;
 
 use neocari::assets::DecodedTexture;
 use neocari::core::Matrix44;
@@ -767,6 +770,12 @@ pub struct SceneRenderer {
     consecutive_failures: u32,
     fused: bool,
     frames: u64,
+    /// FPS counter: pipeline and uploaded strip.
+    overlay: overlay::FpsOverlay,
+    /// Frame-rate measurement for the counter.
+    meter: overlay::FpsMeter,
+    /// Whether the counter is drawn at all.
+    show_fps: bool,
 }
 
 impl SceneRenderer {
@@ -791,6 +800,7 @@ impl SceneRenderer {
         let renderer = WgpuLive2dRenderer::new(&gpu.device, format);
         let blit = Blit::new(&gpu.device, surface.format());
         blit.set_opacity(&gpu.queue, opacity);
+        let overlay = overlay::FpsOverlay::create(&gpu.device, format);
         let (width, height) = surface.size();
         let intermediate = Intermediate::new(
             &gpu.device,
@@ -811,6 +821,9 @@ impl SceneRenderer {
             consecutive_failures: 0,
             fused: false,
             frames: 0,
+            overlay,
+            meter: overlay::FpsMeter::default(),
+            show_fps: false,
         })
     }
 
@@ -828,6 +841,7 @@ impl SceneRenderer {
         let renderer = WgpuLive2dRenderer::new(&gpu.device, format);
         let blit = Blit::new(&gpu.device, format);
         blit.set_opacity(&gpu.queue, opacity);
+        let overlay = overlay::FpsOverlay::create(&gpu.device, format);
         let (width, height) = surface.size();
         let intermediate = Intermediate::new(
             &gpu.device,
@@ -848,6 +862,9 @@ impl SceneRenderer {
             consecutive_failures: 0,
             fused: false,
             frames: 0,
+            overlay,
+            meter: overlay::FpsMeter::default(),
+            show_fps: false,
         })
     }
 
@@ -934,6 +951,34 @@ impl SceneRenderer {
         self.blit.set_opacity(&self.gpu.queue, self.opacity);
     }
 
+    /// Shows or hides the FPS counter in the window's top-left corner.
+    pub fn set_show_fps(&mut self, enabled: bool) {
+        if self.show_fps == enabled {
+            return;
+        }
+        self.show_fps = enabled;
+        if enabled {
+            // Restart the window so the first reading covers frames drawn with
+            // the counter enabled instead of the ones before it.
+            self.meter.restart(Instant::now());
+        } else {
+            self.overlay.clear();
+        }
+    }
+
+    /// Counts a presented frame and re-uploads the counter at most twice a second.
+    fn tick_show_fps(&mut self) {
+        if !self.show_fps {
+            return;
+        }
+        let Some(fps) = self.meter.record(Instant::now()) else {
+            return;
+        };
+        let scale = overlay_scale(self.surface.dpr());
+        self.overlay
+            .set_text(&self.gpu, &format!("FPS {fps}"), scale);
+    }
+
     /// Resizes the swapchain and the intermediate target.
     pub fn resize(&mut self, size: PhysicalSize<u32>, dpr: f64) {
         self.surface.resize(&self.gpu, size, dpr);
@@ -965,6 +1010,7 @@ impl SceneRenderer {
             Ok(()) => {
                 self.consecutive_failures = 0;
                 self.frames += 1;
+                self.tick_show_fps();
             }
             Err(error) => {
                 self.consecutive_failures += 1;
@@ -1076,6 +1122,35 @@ impl SceneRenderer {
             pass.draw(0..3, 0..1);
         }
 
+        // Pass 3: FPS counter, composited over the model.
+        if self.show_fps && self.overlay.is_ready() {
+            let (width, height) = self.surface.size();
+            let margin = overlay_margin(self.surface.dpr());
+            self.overlay.prepare(
+                &self.gpu.queue,
+                (width, height),
+                (margin, margin),
+                self.opacity,
+            );
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("bandori-pet.fps_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &frame_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            self.overlay.draw(&mut pass);
+        }
+
         self.gpu.queue.submit([encoder.finish()]);
         self.gpu.queue.present(frame);
         Ok(())
@@ -1089,6 +1164,16 @@ impl SceneRenderer {
 
 fn scale_dim(value: u32, quality: f32) -> u32 {
     ((value as f32) * quality).round().max(1.0) as u32
+}
+
+/// Bitmap scale that keeps the counter legible at this device pixel ratio.
+fn overlay_scale(dpr: f64) -> u32 {
+    (dpr * 2.0).round().clamp(2.0, 6.0) as u32
+}
+
+/// Distance between the window corner and the counter, in device pixels.
+fn overlay_margin(dpr: f64) -> u32 {
+    (dpr * 8.0).round().clamp(4.0, 24.0) as u32
 }
 
 #[cfg(test)]

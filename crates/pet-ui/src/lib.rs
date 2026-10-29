@@ -720,6 +720,7 @@ fn apply_config_to_window(
     });
     window.set_vsync(config.vsync);
     window.set_gpu(config.gpu_acceleration);
+    window.set_show_fps(config.show_fps);
     window.set_theme(match config.dark_theme {
         pet_config::DarkTheme::Off => 0,
         pet_config::DarkTheme::On => 1,

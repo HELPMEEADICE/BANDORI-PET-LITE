@@ -44,6 +44,7 @@ pub fn apply_level_for(key: &str) -> ApplyLevel {
     let root = key.split('.').next().unwrap_or(key);
     match root {
         "fps"
+        | "show_fps"
         | "opacity"
         | "drag_locked"
         | "live2d_head_tracking_enabled"
@@ -249,6 +250,7 @@ mod tests {
     #[test]
     fn apply_levels_follow_the_spec_table() {
         assert_eq!(apply_level_for("fps"), ApplyLevel::Instant);
+        assert_eq!(apply_level_for("show_fps"), ApplyLevel::Instant);
         assert_eq!(
             apply_level_for("click_motion_actions.head.motion"),
             ApplyLevel::Instant
@@ -304,6 +306,15 @@ mod tests {
             SettingsPatch::from_pairs([("live2d_quality", serde_json::json!("performance"))]);
         assert!(patch.apply_to(&mut config).is_empty());
         assert_eq!(config.live2d_quality, Live2dQuality::Performance);
+    }
+
+    #[test]
+    fn fps_counter_toggle_is_an_instant_patch() {
+        let mut config = Config::default();
+        let patch = SettingsPatch::from_pairs([("show_fps", serde_json::json!(true))]);
+        assert!(patch.apply_to(&mut config).is_empty());
+        assert!(config.show_fps);
+        assert_eq!(patch.highest_apply_level(), ApplyLevel::Instant);
     }
 
     #[test]

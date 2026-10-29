@@ -45,7 +45,7 @@
 - 四语五种变体：简体中文 `zh_CN`、繁體中文 `zh_TW`、日本語 `ja_JP`、한국어 `ko_KR`、English `en_US`；下拉框切换后立即生效，无需重启，选择写入 `config.json` 的 `language`。
 - 覆盖范围：设置窗口全部页面、模型选择器、导入对话框、右键径向菜单、托盘菜单、下载进度与错误提示、「关于」页、桌宠进程上报的加载错误。
 - 实现：`crates/pet-i18n` 存放 `Lang`、`Key` 目录与五种语言表；`pet-ui/ui/texts.slint` 的 `Texts` 结构体由 `pet-ui/src/texts.rs` 填充，需要拼接计数的文案（如「3 套服装」）在 Rust 侧按语言的复数规则生成；`ToggleRow` 的 On/Off 通过属性传入。
-- 验收：`texts::tests::every_language_renders_and_exposes_its_labels` 用软件渲染器逐个语言渲染三个页面，检查窗口标题、导航和开关文案来自对应语言表；截图可用 `BANDORI_UI_QA_DIR` 输出。`pet-i18n` 的测试保证 214 个 `Key` 全部有译文、占位符一一对应、日/韩不是英文原文、繁體不是简体复制。
+- 验收：`texts::tests::every_language_renders_and_exposes_its_labels` 用软件渲染器逐个语言渲染三个页面，检查窗口标题、导航和开关文案来自对应语言表；截图可用 `BANDORI_UI_QA_DIR` 输出。`pet-i18n` 的测试保证 216 个 `Key` 全部有译文、占位符一一对应、日/韩不是英文原文、繁體不是简体复制。
 - 角色名、服装名、乐队名来自模型目录的 `band.json` / `outfit.json`，属于模型数据，不随界面语言变化。
 
 ## 复现方式
@@ -62,6 +62,13 @@ $env:BANDORI_PET_ROOT = "$PWD\run"; $env:RUST_LOG = "info,pet_app=debug"
 * 穿透：`GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & 0x20` 随光标在模型/透明区移动而切换。
 * 位置持久化：拖动松手后立即读 `config.json` 的 `models[0].window_placement`，重启后看日志 `decision=Absolute` 并核对坐标。覆盖透明留白越过屏幕边缘、窗口高于屏幕、负坐标副屏；仍与任一屏幕相交时应原位恢复，完全离屏时应回到可见范围。
 
+
+## FPS 显示（2026-10-29 完成）
+
+- 「显示设置 → 画面与性能」新增「显示帧率」开关，写入 `config.json` 的 `show_fps`（默认关闭，应用级别 `ApplyLevel::Instant`）。开启后每个角色窗口左上角出现 `FPS 60` 形式的读数，关闭后立刻消失，不需要重启。
+- 实现：`pet-render` 的 `FpsOverlay` 用内置 5×7 点阵字体在 CPU 上栅格化一条带圆角底板和预乘 alpha 的贴片，再用一次预乘混合的 `fps_pass` 叠在模型之上；没有新增字体文件或文本排版依赖，读数也随窗口透明度一起缩放。
+- 读数来源：每个窗口按自己实际呈现的帧计数，首个读数为 250ms 窗口、之后为 500ms 窗口，因此它反映的是真实出帧速度（受 vsync、`fps` 上限和模型开销共同影响），而不是设置里的目标值。
+- 验收：`pet-render` 的 `overlay` 单测覆盖点阵尺寸、圆角覆盖率以及 40 / 60 FPS 的读数换算；`pet-config` 覆盖 `show_fps` 的默认值、JSON 往返与即时应用级别。
 
 ## 修复记录
 

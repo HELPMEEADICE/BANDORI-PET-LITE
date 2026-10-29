@@ -369,6 +369,7 @@ impl Role {
         if self.renderer.vsync() != config.vsync {
             self.renderer.set_vsync(config.vsync);
         }
+        self.renderer.set_show_fps(config.show_fps);
         self.hide_live2d_model = config.hide_live2d_model;
         self.sync_visibility();
     }

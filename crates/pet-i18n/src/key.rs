@@ -78,6 +78,8 @@ keys! {
     QualityBalanced,
     QualityHint,
     FpsLabel,
+    ShowFpsLabel,
+    ShowFpsHint,
     ScaleLabel,
     OpacityLabel,
     VsyncLabel,

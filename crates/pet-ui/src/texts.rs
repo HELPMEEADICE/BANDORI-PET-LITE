@@ -54,6 +54,8 @@ pub(crate) fn texts(lang: Lang) -> crate::Texts {
         quality_label: t(Key::QualityLabel),
         quality_hint: t(Key::QualityHint),
         fps_label: t(Key::FpsLabel),
+        show_fps_label: t(Key::ShowFpsLabel),
+        show_fps_hint: t(Key::ShowFpsHint),
         scale_label: t(Key::ScaleLabel),
         opacity_label: t(Key::OpacityLabel),
         vsync_label: t(Key::VsyncLabel),

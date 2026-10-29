@@ -132,6 +132,7 @@ export component SettingsWindow inherits Window {
     in-out property <int> quality: 1;
     in-out property <bool> vsync: true;
     in-out property <bool> gpu: true;
+    in-out property <bool> show-fps: false;
     in-out property <int> theme: 2;
     in-out property <bool> drag-locked: true;
     in-out property <bool> head-tracking: true;
@@ -722,6 +723,15 @@ export component SettingsWindow inherits Window {
                                                 width: 75px;
                                                 horizontal-alignment: right;
                                             }
+                                        }
+
+                                        ToggleRow {
+                                            text: root.t.show-fps-label;
+                                            on-label: root.t.toggle-on;
+                                            off-label: root.t.toggle-off;
+                                            hint: root.t.show-fps-hint;
+                                            checked: root.show-fps;
+                                            toggled(value) => { root.show-fps = value; root.patch-bool("show_fps", value); }
                                         }
 
                                         HorizontalLayout {

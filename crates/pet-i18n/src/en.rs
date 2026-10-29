@@ -53,6 +53,8 @@ pub(crate) fn text(key: Key) -> &'static str {
         Key::QualityBalanced => "Balanced",
         Key::QualityHint => "Power saver: 0.75× resolution    Balanced: native resolution",
         Key::FpsLabel => "Frame rate",
+        Key::ShowFpsLabel => "Show the FPS counter",
+        Key::ShowFpsHint => "Draws the live frame rate in the model window's top-left corner",
         Key::ScaleLabel => "Model scale",
         Key::OpacityLabel => "Opacity",
         Key::VsyncLabel => "V-Sync",

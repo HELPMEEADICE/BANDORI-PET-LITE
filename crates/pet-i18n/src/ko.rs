@@ -53,6 +53,8 @@ pub(crate) fn text(key: Key) -> &'static str {
         Key::QualityBalanced => "균형",
         Key::QualityHint => "절전: 0.75× 해상도    균형: 원본 해상도",
         Key::FpsLabel => "프레임 레이트",
+        Key::ShowFpsLabel => "프레임 레이트 표시",
+        Key::ShowFpsHint => "모델 창 왼쪽 위에 현재 프레임 레이트를 표시합니다",
         Key::ScaleLabel => "모델 크기",
         Key::OpacityLabel => "불투명도",
         Key::VsyncLabel => "V-Sync (수직 동기)",

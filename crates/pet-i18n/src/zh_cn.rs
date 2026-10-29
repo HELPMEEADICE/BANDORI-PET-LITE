@@ -53,6 +53,8 @@ pub(crate) fn text(key: Key) -> &'static str {
         Key::QualityBalanced => "均衡",
         Key::QualityHint => "省电：0.75× 分辨率    均衡：原生分辨率",
         Key::FpsLabel => "刷新率",
+        Key::ShowFpsLabel => "显示帧率",
+        Key::ShowFpsHint => "在模型窗口左上角显示实时帧率",
         Key::ScaleLabel => "模型缩放",
         Key::OpacityLabel => "不透明度",
         Key::VsyncLabel => "垂直同步",

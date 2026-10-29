@@ -53,6 +53,8 @@ pub(crate) fn text(key: Key) -> &'static str {
         Key::QualityBalanced => "バランス",
         Key::QualityHint => "省電力：0.75× 解像度    バランス：ネイティブ解像度",
         Key::FpsLabel => "フレームレート",
+        Key::ShowFpsLabel => "フレームレートを表示",
+        Key::ShowFpsHint => "モデルウィンドウの左上に現在のフレームレートを表示します",
         Key::ScaleLabel => "モデルの拡大率",
         Key::OpacityLabel => "不透明度",
         Key::VsyncLabel => "V-Sync（垂直同期）",

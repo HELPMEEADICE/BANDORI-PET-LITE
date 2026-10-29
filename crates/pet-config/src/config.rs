@@ -377,6 +377,8 @@ pub struct Config {
 
     /// Target frame rate (30–240).
     pub fps: u32,
+    /// Draw the measured frame rate in the model window's top-left corner.
+    pub show_fps: bool,
     /// Whether the surface uses vsync presentation.
     pub vsync: bool,
     /// GPU acceleration switch; only read at process start.
@@ -443,6 +445,7 @@ impl Default for Config {
             dark_theme: DarkTheme::System,
 
             fps: 120,
+            show_fps: false,
             vsync: true,
             gpu_acceleration: true,
             opacity: bounds::OPACITY_MAX,
@@ -618,11 +621,21 @@ mod tests {
         let config: Config = serde_json::from_str("{}").expect("parse");
         assert_eq!(config.fps, 120);
         assert_eq!(config.opacity, 1.0);
+        assert!(!config.show_fps);
         assert!(config.click_motion_actions.contains_key("head"));
         assert_eq!(config.click_motion_actions.len(), 7);
         assert!(!config.live2d_idle_actions_enabled);
         assert!(!config.live2d_random_actions_enabled);
         assert!(!config.emotion_behavior_enabled);
+    }
+
+    #[test]
+    fn fps_counter_is_opt_in_and_persisted() {
+        assert!(!Config::default().show_fps);
+        let config: Config = serde_json::from_str(r#"{"show_fps": true}"#).expect("parse");
+        assert!(config.show_fps);
+        let json: Value = serde_json::to_value(&config).expect("serialize");
+        assert_eq!(json["show_fps"], serde_json::json!(true));
     }
 
     #[test]
