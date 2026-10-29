@@ -6,14 +6,15 @@
 //! `One/OneMinusSrcAlpha`, which matches `CompositeAlphaMode::PreMultiplied` on a
 //! transparent surface.
 //!
-//! The model always renders into an intermediate texture that is then blitted to
-//! the swapchain. That single extra pass buys three things at once:
-//!
-//! * the "省电" quality tier (0.75× render resolution),
-//! * window opacity without `WS_EX_LAYERED` colour-key hacks,
-//! * a place to pre-multiply if a machine only offers `PostMultiplied` surfaces.
+//! Full-resolution, fully opaque windows with premultiplied surfaces render
+//! directly to the swapchain. Resolution scaling and window opacity use an
+//! intermediate texture and a fullscreen blit. Both paths retain transparent
+//! model pixels and composite the FPS counter in their final render pass.
 
 mod overlay;
+
+#[cfg(test)]
+mod regression;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -342,6 +343,7 @@ fn choose_present_mode(modes: &[wgpu::PresentMode], vsync: bool) -> wgpu::Presen
 pub struct ModelGpu {
     mesh_buffers: WgpuMeshBuffers,
     textures: Vec<WgpuTexture>,
+    clipping_plan: WgpuClippingPlan,
     clipping: WgpuClippingResources,
     mask_target: WgpuMaskRenderTarget,
     transform: WgpuTransform,
@@ -372,7 +374,13 @@ impl ModelGpu {
                 .map_err(|error| RenderError::Texture(error.to_string()))?;
             uploaded.push(uploaded_texture);
         }
-        let clipping = build_clipping(gpu, renderer, &mesh_buffers)?;
+        let mut clipping_plan = WgpuClippingPlan::from_mesh_buffers(&mesh_buffers);
+        clipping_plan
+            .prepare_single_texture_masks(&mesh_buffers)
+            .map_err(|error| RenderError::Clipping(format!("{error:?}")))?;
+        let clipping = renderer
+            .create_clipping_resources(&gpu.device, &clipping_plan)
+            .map_err(|error| RenderError::Clipping(format!("{error:?}")))?;
         let mask_target = renderer
             .create_mask_render_target(&gpu.device, MASK_TEXTURE_SIZE)
             .map_err(|error| RenderError::Texture(error.to_string()))?;
@@ -381,6 +389,7 @@ impl ModelGpu {
         Ok(Self {
             mesh_buffers,
             textures: uploaded,
+            clipping_plan,
             clipping,
             mask_target,
             transform,
@@ -397,8 +406,15 @@ impl ModelGpu {
     ) -> Result<(), RenderError> {
         match self.mesh_buffers.update_drawables(&gpu.queue, meshes) {
             Ok(update) => {
-                if update.bounds_changed() || update.visibility_changed() {
-                    self.rebuild_clipping(gpu, renderer)?;
+                if update.visibility_changed() {
+                    // Plans group visible meshes, so part fades can change the
+                    // membership even when geometry and mask ids stay fixed.
+                    self.clipping_plan = WgpuClippingPlan::from_mesh_buffers(&self.mesh_buffers);
+                }
+                if update.visibility_changed()
+                    || (update.bounds_changed() && !self.clipping_plan.contexts().is_empty())
+                {
+                    self.refresh_clipping(gpu, renderer)?;
                 }
                 Ok(())
             }
@@ -406,7 +422,8 @@ impl ModelGpu {
                 self.mesh_buffers = WgpuMeshBuffers::from_drawables(&gpu.device, meshes)
                     .ok_or(RenderError::MeshUpload)?;
                 self.drawable_count = self.mesh_buffers.drawables().len();
-                self.rebuild_clipping(gpu, renderer)
+                self.clipping_plan = WgpuClippingPlan::from_mesh_buffers(&self.mesh_buffers);
+                self.refresh_clipping(gpu, renderer)
             }
         }
     }
@@ -418,19 +435,21 @@ impl ModelGpu {
         }
     }
 
-    fn rebuild_clipping(
+    fn refresh_clipping(
         &mut self,
         gpu: &Gpu,
         renderer: &WgpuLive2dRenderer,
     ) -> Result<(), RenderError> {
-        let mut plan = WgpuClippingPlan::from_mesh_buffers(&self.mesh_buffers);
-        plan.prepare_single_texture_masks(&self.mesh_buffers)
+        self.clipping_plan
+            .prepare_single_texture_masks(&self.mesh_buffers)
             .map_err(|error| RenderError::Clipping(format!("{error:?}")))?;
         if !renderer
-            .update_clipping_resources(&gpu.queue, &mut self.clipping, &plan)
+            .update_clipping_resources(&gpu.queue, &mut self.clipping, &self.clipping_plan)
             .map_err(|error| RenderError::Clipping(format!("{error:?}")))?
         {
-            self.clipping = build_clipping(gpu, renderer, &self.mesh_buffers)?;
+            self.clipping = renderer
+                .create_clipping_resources(&gpu.device, &self.clipping_plan)
+                .map_err(|error| RenderError::Clipping(format!("{error:?}")))?;
         }
         Ok(())
     }
@@ -444,19 +463,68 @@ impl ModelGpu {
     pub fn texture_count(&self) -> usize {
         self.textures.len()
     }
-}
 
-fn build_clipping(
-    gpu: &Gpu,
-    renderer: &WgpuLive2dRenderer,
-    mesh_buffers: &WgpuMeshBuffers,
-) -> Result<WgpuClippingResources, RenderError> {
-    let mut plan = WgpuClippingPlan::from_mesh_buffers(mesh_buffers);
-    plan.prepare_single_texture_masks(mesh_buffers)
-        .map_err(|error| RenderError::Clipping(format!("{error:?}")))?;
-    renderer
-        .create_clipping_resources(&gpu.device, &plan)
-        .map_err(|error| RenderError::Clipping(format!("{error:?}")))
+    fn draw_masks(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        renderer: &WgpuLive2dRenderer,
+    ) -> Result<(), RenderError> {
+        if self.clipping.contexts().is_empty() {
+            return Ok(());
+        }
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("bandori-pet.mask_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: self.mask_target.view(),
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        renderer
+            .draw_masks_with_textures(
+                &mut pass,
+                &self.mesh_buffers,
+                &self.clipping,
+                &self.textures,
+            )
+            .map(|_| ())
+            .map_err(|error| RenderError::Draw(error.to_string()))
+    }
+
+    fn draw(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        renderer: &WgpuLive2dRenderer,
+    ) -> Result<(), RenderError> {
+        let result = if self.clipping.contexts().is_empty() {
+            renderer.draw_with_textures_and_transform(
+                pass,
+                &self.mesh_buffers,
+                &self.textures,
+                &self.transform,
+            )
+        } else {
+            renderer.draw_with_textures_clipping_and_transform(
+                pass,
+                &self.mesh_buffers,
+                &self.textures,
+                &self.clipping,
+                &self.mask_target,
+                &self.transform,
+            )
+        };
+        result
+            .map(|_| ())
+            .map_err(|error| RenderError::Draw(error.to_string()))
+    }
 }
 
 /// Renders a single transparent preview without creating a native window.
@@ -495,15 +563,12 @@ pub fn render_preview(
         mapped_at_creation: false,
     });
     let mut encoder = gpu.device.create_command_encoder(&Default::default());
-    for mask in [true, false] {
+    model.draw_masks(&mut encoder, &renderer)?;
+    {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("bandori-picker.preview-pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: if mask {
-                    model.mask_target.view()
-                } else {
-                    &view
-                },
+                view: &view,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
@@ -516,24 +581,7 @@ pub fn render_preview(
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        if mask {
-            renderer.draw_masks_with_textures(
-                &mut pass,
-                &model.mesh_buffers,
-                &model.clipping,
-                &model.textures,
-            )
-        } else {
-            renderer.draw_with_textures_clipping_and_transform(
-                &mut pass,
-                &model.mesh_buffers,
-                &model.textures,
-                &model.clipping,
-                &model.mask_target,
-                &model.transform,
-            )
-        }
-        .map_err(|error| RenderError::Draw(error.to_string()))?;
+        model.draw(&mut pass, &renderer)?;
     }
     encoder.copy_texture_to_buffer(
         texture.as_image_copy(),
@@ -755,6 +803,69 @@ impl Intermediate {
     }
 }
 
+fn encode_frame(
+    encoder: &mut wgpu::CommandEncoder,
+    renderer: &WgpuLive2dRenderer,
+    model: &ModelGpu,
+    frame_view: &wgpu::TextureView,
+    intermediate: Option<&Intermediate>,
+    blit: &Blit,
+    overlay: Option<&overlay::FpsOverlay>,
+) -> Result<(), RenderError> {
+    model.draw_masks(encoder, renderer)?;
+
+    // Draw directly to the surface when no scaling or opacity blit is needed.
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("bandori-pet.main_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: intermediate.map_or(frame_view, |target| &target.view),
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        model.draw(&mut pass, renderer)?;
+        if let (None, Some(overlay)) = (intermediate, overlay) {
+            overlay.draw(&mut pass);
+        }
+    }
+
+    // Scaling/opacity path: composite the counter in the same final pass.
+    if let Some(target) = intermediate {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("bandori-pet.blit_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: frame_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&blit.pipeline);
+        pass.set_bind_group(0, &target.blit_bind_group, &[]);
+        pass.draw(0..3, 0..1);
+        if let Some(overlay) = overlay {
+            overlay.draw(&mut pass);
+        }
+    }
+    Ok(())
+}
+
 /// One role window's renderer: swapchain, blit, intermediate target.
 pub struct SceneRenderer {
     gpu: Arc<Gpu>,
@@ -764,7 +875,7 @@ pub struct SceneRenderer {
     format: wgpu::TextureFormat,
     surface: Surface,
     blit: Blit,
-    intermediate: Intermediate,
+    intermediate: Option<Intermediate>,
     quality: f32,
     opacity: f32,
     consecutive_failures: u32,
@@ -802,13 +913,15 @@ impl SceneRenderer {
         blit.set_opacity(&gpu.queue, opacity);
         let overlay = overlay::FpsOverlay::create(&gpu.device, format);
         let (width, height) = surface.size();
-        let intermediate = Intermediate::new(
-            &gpu.device,
-            scale_dim(width, quality),
-            scale_dim(height, quality),
-            surface.format(),
-            &blit,
-        );
+        let intermediate = needs_intermediate(quality, opacity, surface.alpha_mode()).then(|| {
+            Intermediate::new(
+                &gpu.device,
+                scale_dim(width, quality),
+                scale_dim(height, quality),
+                surface.format(),
+                &blit,
+            )
+        });
         Ok(Self {
             gpu,
             renderer,
@@ -843,13 +956,15 @@ impl SceneRenderer {
         blit.set_opacity(&gpu.queue, opacity);
         let overlay = overlay::FpsOverlay::create(&gpu.device, format);
         let (width, height) = surface.size();
-        let intermediate = Intermediate::new(
-            &gpu.device,
-            scale_dim(width, quality),
-            scale_dim(height, quality),
-            surface.format(),
-            &blit,
-        );
+        let intermediate = needs_intermediate(quality, opacity, surface.alpha_mode()).then(|| {
+            Intermediate::new(
+                &gpu.device,
+                scale_dim(width, quality),
+                scale_dim(height, quality),
+                surface.format(),
+                &blit,
+            )
+        });
         Ok(Self {
             gpu,
             renderer,
@@ -930,25 +1045,34 @@ impl SceneRenderer {
     }
 
     fn resize_intermediate(&mut self) {
+        if !needs_intermediate(self.quality, self.opacity, self.surface.alpha_mode()) {
+            self.intermediate = None;
+            return;
+        }
         let (width, height) = self.surface.size();
         let width = scale_dim(width, self.quality);
         let height = scale_dim(height, self.quality);
-        if (self.intermediate.width, self.intermediate.height) == (width, height) {
+        if self
+            .intermediate
+            .as_ref()
+            .is_some_and(|target| (target.width, target.height) == (width, height))
+        {
             return;
         }
-        self.intermediate = Intermediate::new(
+        self.intermediate = Some(Intermediate::new(
             &self.gpu.device,
             width,
             height,
             self.surface.format(),
             &self.blit,
-        );
+        ));
     }
 
     /// Applies window opacity (multiplied into the blit).
     pub fn set_opacity(&mut self, opacity: f32) {
         self.opacity = opacity.clamp(0.0, 1.0);
         self.blit.set_opacity(&self.gpu.queue, self.opacity);
+        self.resize_intermediate();
     }
 
     /// Shows or hides the FPS counter in the window's top-left corner.
@@ -1041,115 +1165,25 @@ impl SceneRenderer {
                 label: Some("bandori-pet.encoder"),
             });
 
-        // Pass 0: clipping masks into the offscreen atlas.
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("bandori-pet.mask_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: model.mask_target.view(),
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            self.renderer
-                .draw_masks_with_textures(
-                    &mut pass,
-                    &model.mesh_buffers,
-                    &model.clipping,
-                    &model.textures,
-                )
-                .map_err(|error| RenderError::Draw(error.to_string()))?;
-        }
-
-        // Pass 1: the model, into the intermediate target.
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("bandori-pet.main_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.intermediate.view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            self.renderer
-                .draw_with_textures_clipping_and_transform(
-                    &mut pass,
-                    &model.mesh_buffers,
-                    &model.textures,
-                    &model.clipping,
-                    &model.mask_target,
-                    &model.transform,
-                )
-                .map_err(|error| RenderError::Draw(error.to_string()))?;
-        }
-
-        // Pass 2: blit to the swapchain (scale + opacity).
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("bandori-pet.blit_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &frame_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.blit.pipeline);
-            pass.set_bind_group(0, &self.intermediate.blit_bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-
-        // Pass 3: FPS counter, composited over the model.
-        if self.show_fps && self.overlay.is_ready() {
-            let (width, height) = self.surface.size();
+        let show_overlay = self.show_fps && self.overlay.is_ready();
+        if show_overlay {
             let margin = overlay_margin(self.surface.dpr());
             self.overlay.prepare(
                 &self.gpu.queue,
-                (width, height),
+                self.surface.size(),
                 (margin, margin),
                 self.opacity,
             );
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("bandori-pet.fps_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &frame_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            self.overlay.draw(&mut pass);
         }
+        encode_frame(
+            &mut encoder,
+            &self.renderer,
+            model,
+            &frame_view,
+            self.intermediate.as_ref(),
+            &self.blit,
+            show_overlay.then_some(&self.overlay),
+        )?;
 
         self.gpu.queue.submit([encoder.finish()]);
         self.gpu.queue.present(frame);
@@ -1158,8 +1192,16 @@ impl SceneRenderer {
 
     /// Intermediate target size (for the quality indicator).
     pub fn render_size(&self) -> (u32, u32) {
-        (self.intermediate.width, self.intermediate.height)
+        let (width, height) = self.surface.size();
+        (
+            scale_dim(width, self.quality),
+            scale_dim(height, self.quality),
+        )
     }
+}
+
+fn needs_intermediate(quality: f32, opacity: f32, alpha_mode: wgpu::CompositeAlphaMode) -> bool {
+    quality != 1.0 || opacity != 1.0 || alpha_mode != wgpu::CompositeAlphaMode::PreMultiplied
 }
 
 fn scale_dim(value: u32, quality: f32) -> u32 {
@@ -1214,5 +1256,17 @@ mod tests {
         assert_eq!(scale_dim(800, 0.75), 600);
         assert_eq!(scale_dim(801, 1.0), 801);
         assert_eq!(scale_dim(2, 0.25), 1);
+    }
+
+    #[test]
+    fn direct_render_requires_full_resolution_opacity_and_premultiplied_surface() {
+        use wgpu::CompositeAlphaMode::*;
+        assert!(!needs_intermediate(1.0, 1.0, PreMultiplied));
+        assert!(needs_intermediate(0.75, 1.0, PreMultiplied));
+        assert!(needs_intermediate(1.0, 0.5, PreMultiplied));
+        assert!(needs_intermediate(0.75, 0.5, PreMultiplied));
+        for alpha in [Auto, Opaque, PostMultiplied, Inherit] {
+            assert!(needs_intermediate(1.0, 1.0, alpha));
+        }
     }
 }

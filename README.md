@@ -135,6 +135,7 @@ slint-lsp format -i @slintFiles
 
 - [验收清单](docs/ACCEPTANCE.md)：功能覆盖情况、验证方式与已知限制。
 - [内存测量记录](docs/MEMORY.md)：优化前后的测量条件和结果。
+- [渲染性能说明](docs/RENDER_PERFORMANCE.md)：moc/moc3 共享渲染路径的优化和像素回归验证。
 - [行为参考](docs/reference/BANDORI-PET-REV-behavior-spec.md)：动作匹配、区域和行为参数的参考记录。
 
 部分功能仍有局限：点击动作配置还没有导入和导出界面；其他实现差异见验收清单。

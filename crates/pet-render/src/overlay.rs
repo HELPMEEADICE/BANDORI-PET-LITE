@@ -412,7 +412,7 @@ impl FpsOverlay {
         queue.write_buffer(&self.params, 0, bytemuck::cast_slice(&params));
     }
 
-    /// Draws the strip; the pass must load the already rendered swapchain image.
+    /// Draws the strip after the model or blit in the final surface pass.
     pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass<'_>) {
         let Some(bind_group) = self.bind_group.as_ref() else {
             return;
