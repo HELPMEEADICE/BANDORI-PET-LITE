@@ -1,5 +1,11 @@
 # BANDORI-PET-LITE
 
+[![Rust 1.85+](https://img.shields.io/badge/Rust-1.85%2B-orange?logo=rust)](https://www.rust-lang.org/)
+[![Slint 1.18](https://img.shields.io/badge/Slint-1.18-blue)](https://slint.dev/)
+[![wgpu 30](https://img.shields.io/badge/wgpu-30-blueviolet)](https://wgpu.rs/)
+[![winit 0.30](https://img.shields.io/badge/winit-0.30-informational)](https://github.com/rust-windowing/winit)
+[![Neocari Live2D](https://img.shields.io/badge/Live2D-Neocari-ff69b4)](https://github.com/HELPMEEADICE/Neocari)
+
 把 BanG Dream! 的 Live2D 角色放到 Windows、macOS 或 Linux（X11）桌面上。你可以拖动角色、点击不同部位触发动作，也可以同时放上多个角色，给他们各自换装。
 
 项目使用 Rust 和 [Neocari](https://github.com/HELPMEEADICE/Neocari) 构建，支持 Cubism 2 的 `.moc` 和 Cubism 3/4/5 的 `.moc3` 模型。本仓库不包含模型文件；可以在程序里下载，也可以导入已有的模型包。
