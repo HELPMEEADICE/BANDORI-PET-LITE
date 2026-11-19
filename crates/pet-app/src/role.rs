@@ -8,7 +8,7 @@ use pet_assets::catalog::CatalogCostume;
 use pet_assets::ModelCache;
 use pet_behavior::{BehaviorContext, Command, RoleBehavior, RoleBehaviorConfig, WindowMotionKind};
 use pet_config::{Config, ModelEntry, Placement};
-use pet_input::hit::{AlphaTexture, FrameSnapshot, HitStability};
+use pet_input::hit::{cursor_to_model, hit_test_meshes, AlphaTexture, FrameSnapshot, HitStability};
 
 use pet_live2d::{ModelHandle, ModelInfo};
 use pet_render::{ModelGpu, RenderError, SceneRenderer};
@@ -23,6 +23,9 @@ use winit::event_loop::ActiveEventLoop;
 #[cfg(windows)]
 use winit::platform::windows::{WindowAttributesExtWindows, WindowExtWindows};
 use winit::window::{Window, WindowLevel};
+
+/// Hidden models still advance to keep motion and behavior timers in step.
+const HIDDEN_MODEL_STEP_SECONDS: f32 = 0.1;
 
 /// Result alias for role construction.
 pub type RoleResult<T> = Result<T, RoleError>;
@@ -68,6 +71,10 @@ pub struct Role {
     pub model: ModelHandle,
     /// GPU copies of meshes, textures and clipping.
     pub model_gpu: ModelGpu,
+    /// Whether the CPU pose is newer than the uploaded geometry.
+    meshes_dirty: bool,
+    /// Time accumulated between hidden animation updates.
+    deferred_model_seconds: f32,
     /// Behavior state machine.
     pub behavior: RoleBehavior,
     /// Model-space content bounds.
@@ -102,8 +109,6 @@ pub struct Role {
     hide_live2d_model: bool,
     /// Whether the first frame has been presented.
     first_frame_done: bool,
-    /// Cached model info for the settings UI.
-    info: ModelInfo,
     /// Timestamp of the last topmost re-assert.
     last_topmost: Instant,
     /// Model selection bookkeeping for `MODEL_DATA` messages.
@@ -127,8 +132,6 @@ impl Role {
         let started = Instant::now();
         let resolved = cache.resolve(&entry.path)?;
         let mut model = ModelHandle::load(&resolved.model_path)?;
-        let info = model.info().clone();
-
         let bounds = content_size(model.meshes()).ok_or(RoleError::NoBounds)?;
         let layout = ModelLayout::new(bounds, model.face_height(), model.format());
         let dpr = event_loop
@@ -267,6 +270,7 @@ impl Role {
         model.set_auto_blink(true);
         model.set_auto_breath(true);
 
+        let info = model.info();
         info!(
             ms = started.elapsed().as_millis(),
             format = ?info.format,
@@ -280,6 +284,8 @@ impl Role {
             renderer,
             model,
             model_gpu,
+            meshes_dirty: false,
+            deferred_model_seconds: 0.0,
             behavior,
             bounds,
             layout,
@@ -297,7 +303,6 @@ impl Role {
             hidden: false,
             hide_live2d_model: config.hide_live2d_model,
             first_frame_done: false,
-            info,
             last_topmost: Instant::now(),
             character: entry.character.clone(),
             costume: entry.costume.clone(),
@@ -318,14 +323,14 @@ impl Role {
         // Present the first frame *before* showing the window: a hidden winit
         // window receives no WM_PAINT, so waiting for `RedrawRequested` would
         // deadlock the very first frame (spec: first frame before everything else).
-        let presented = role.render();
+        let needs_frame = role.wants_frame();
+        let presented = needs_frame && role.render();
         #[cfg(windows)]
         if let Some(hwnd) = win32::hwnd_of(&role.window) {
             win32::reassert_topmost(hwnd);
         }
-        if !presented {
+        if needs_frame && !presented {
             warn!("first frame was not presented; the window may need a redraw");
-            role.window.request_redraw();
         }
         Ok(role)
     }
@@ -337,17 +342,17 @@ impl Role {
 
     /// Model capabilities for the settings window.
     pub fn info(&self) -> &ModelInfo {
-        &self.info
+        self.model.info()
     }
 
     /// Current motion group names.
     pub fn motion_names(&self) -> &[String] {
-        &self.info.motion_groups
+        &self.info().motion_groups
     }
 
     /// Current expression names.
     pub fn expression_names(&self) -> &[String] {
-        &self.info.expression_names
+        &self.info().expression_names
     }
 
     /// Replaces the behavior config after a settings change.
@@ -370,8 +375,12 @@ impl Role {
             self.renderer.set_vsync(config.vsync);
         }
         self.renderer.set_show_fps(config.show_fps);
+        let showing = self.hide_live2d_model && !config.hide_live2d_model;
         self.hide_live2d_model = config.hide_live2d_model;
         self.sync_visibility();
+        if showing {
+            self.request_frame();
+        }
     }
 
     /// Rebuilds the window for a scale change (RebuildWindow apply level).
@@ -474,28 +483,49 @@ impl Role {
         }
     }
 
-    /// Advances the model by `dt` and uploads the resulting meshes.
+    /// Advances the CPU model by `dt`. Rendering uploads the latest pose.
     pub fn advance_model(&mut self, dt: f32) {
-        if !self.model.update(dt) {
+        let elapsed = dt + self.deferred_model_seconds;
+        if (self.hidden || self.hide_live2d_model) && elapsed < HIDDEN_MODEL_STEP_SECONDS {
+            self.deferred_model_seconds = elapsed;
+            return;
+        }
+        self.deferred_model_seconds = 0.0;
+        if !self.model.update(elapsed) {
             warn!("model update failed");
             return;
         }
-        if let Err(error) = self.model_gpu.update_meshes(
-            self.renderer.gpu(),
-            self.renderer.renderer(),
-            self.model.meshes(),
-        ) {
-            warn!(%error, "mesh upload failed");
+        self.meshes_dirty = true;
+    }
+
+    fn wants_frame(&self) -> bool {
+        !self.hidden && !self.hide_live2d_model && !self.renderer.is_fused()
+    }
+
+    pub(crate) fn request_frame(&mut self) {
+        if !self.wants_frame() {
+            return;
+        }
+        if self.deferred_model_seconds > 0.0 {
+            self.advance_model(0.0);
+        }
+        if self.first_frame_done {
+            self.window.request_redraw();
+        } else {
+            // A window that has never been shown may not receive redraw events.
+            self.render();
         }
     }
 
     /// Renders one frame.
     pub fn render(&mut self) -> bool {
-        if self.hidden || self.renderer.is_fused() {
+        if !self.wants_frame() {
             return false;
         }
-        match self.renderer.render(&self.model_gpu) {
+        let meshes = self.meshes_dirty.then(|| self.model.meshes());
+        match self.renderer.render(&mut self.model_gpu, meshes) {
             Ok(()) => {
+                self.meshes_dirty = false;
                 if !self.first_frame_done {
                     self.first_frame_done = true;
                     self.sync_visibility();
@@ -544,6 +574,10 @@ impl Role {
 
     /// Passthrough duty cycle: 16 ms while the cursor is near, 125 ms when idle.
     pub fn poll_passthrough(&mut self, config: &Config, now_ms: u64) {
+        let elapsed = self.last_passthrough_poll.elapsed().as_millis();
+        if elapsed < 16 {
+            return;
+        }
         // A click-through window receives no CursorMoved/Entered events. Use the
         // global cursor so it can become interactive again without a 125ms lag.
         let near = global_cursor(&self.window)
@@ -555,7 +589,7 @@ impl Role {
                     && cy < y as f32 + height as f32 + 96.0
             });
         let interval = if near { 16 } else { 125 };
-        if self.last_passthrough_poll.elapsed().as_millis() < interval as u128 {
+        if elapsed < interval {
             return;
         }
         self.last_passthrough_poll = Instant::now();
@@ -575,10 +609,21 @@ impl Role {
 
     /// Tests a local physical-pixel cursor position against the model.
     pub fn hit_test(&mut self, cursor: (f32, f32), alpha_threshold: u8, now_ms: u64) -> bool {
-        let snapshot = self.snapshot();
+        let hit = self.is_opaque_at(cursor, alpha_threshold);
+        self.stability.confirm(hit, cursor, now_ms)
+    }
+
+    fn is_opaque_at(&self, cursor: (f32, f32), alpha_threshold: u8) -> bool {
         let size = self.window.inner_size();
-        let result = snapshot.hit_test(cursor, (size.width, size.height), alpha_threshold);
-        self.stability.confirm(result.hit, cursor, now_ms)
+        hit_test_meshes(
+            self.model.meshes(),
+            &self.textures,
+            &self.matrix,
+            cursor,
+            (size.width, size.height),
+            alpha_threshold,
+        )
+        .hit
     }
 
     /// Region for a local cursor position.
@@ -586,8 +631,7 @@ impl Role {
     /// The 7-region split uses content bounds, excluding transparent padding.
     pub fn region_at(&mut self, cursor: (f32, f32)) -> pet_config::ClickRegion {
         let size = self.window.inner_size();
-        let snapshot = self.snapshot();
-        let Some(point) = snapshot.cursor_to_model(cursor, (size.width, size.height)) else {
+        let Some(point) = cursor_to_model(&self.matrix, cursor, (size.width, size.height)) else {
             return pet_config::ClickRegion::UpperBodyCenter;
         };
         let area = self
@@ -703,8 +747,7 @@ impl Role {
     ) -> Vec<Command> {
         let size = self.window.inner_size();
         let hour = pet_util::time_of_day::local_hour();
-        let motion_names = self.info.motion_groups.clone();
-        let expression_names = self.info.expression_names.clone();
+        let info = self.model.info();
         // Window events stop outside the window and while it is click-through.
         // Sample the screen cursor every tick, keeping out-of-bounds local
         // coordinates so head tracking still sees targets beyond the window.
@@ -721,8 +764,8 @@ impl Role {
             hour,
             peer_center,
             own_center,
-            motion_names: &motion_names,
-            expression_names: &expression_names,
+            motion_names: &info.motion_groups,
+            expression_names: &info.expression_names,
             character: &self.character,
             motion_finished: self.model.is_motion_finished(),
         };
@@ -738,7 +781,7 @@ impl Role {
             Command::PlayMotion(group) => {
                 tracing::debug!(motion = %group, "play motion");
                 if group.is_empty() {
-                    if let Some(default) = self.info.default_motion_group() {
+                    if let Some(default) = self.info().default_motion_group() {
                         let default = default.to_owned();
                         self.model.play_motion(&default);
                     }
@@ -761,7 +804,7 @@ impl Role {
             Command::PlayRandomMotion => {
                 let mut rng = pet_util::Rng::from_entropy();
                 let names: Vec<String> = self
-                    .info
+                    .info()
                     .motion_groups
                     .iter()
                     .filter(|name| {
@@ -806,15 +849,7 @@ impl Role {
             return true;
         }
         let local = (global.0 - x as f32, global.1 - y as f32);
-        let snapshot = self.snapshot();
-        let size = self.window.inner_size();
-        let raw_hit = snapshot
-            .hit_test(
-                local,
-                (size.width, size.height),
-                config.live2d_hit_alpha_threshold,
-            )
-            .hit;
+        let raw_hit = self.is_opaque_at(local, config.live2d_hit_alpha_threshold);
         let hit = self.stability.confirm_with(raw_hit, local, now_ms, 80);
         !hit
     }
@@ -862,8 +897,12 @@ impl Role {
 
     /// Hides or shows the role window.
     pub fn set_hidden(&mut self, hidden: bool) {
+        let showing = self.hidden && !hidden;
         self.hidden = hidden;
         self.sync_visibility();
+        if showing {
+            self.request_frame();
+        }
     }
 
     fn sync_visibility(&self) {
@@ -884,7 +923,7 @@ impl Role {
     pub fn play_menu_motion(&mut self, now: f64) {
         let mut rng = pet_util::Rng::from_entropy();
         let names: Vec<String> = self
-            .info
+            .info()
             .motion_groups
             .iter()
             .filter(|name| {
@@ -939,7 +978,6 @@ impl Role {
     ) -> RoleResult<()> {
         let resolved = cache.resolve(&entry.path)?;
         let mut model = ModelHandle::load(&resolved.model_path)?;
-        let info = model.info().clone();
         let bounds = content_size(model.meshes()).ok_or(RoleError::NoBounds)?;
         let layout = ModelLayout::new(bounds, model.face_height(), model.format());
         let dpr = self.window.scale_factor();
@@ -953,11 +991,12 @@ impl Role {
 
         self.model = model;
         self.model_gpu = model_gpu;
+        self.meshes_dirty = false;
+        self.deferred_model_seconds = 0.0;
         self.textures = textures;
         self.bounds = bounds;
         self.layout = layout;
         self.matrix = matrix;
-        self.info = info;
         self.entry = entry.clone();
         self.character = entry.character.clone();
         self.costume = entry.costume.clone();

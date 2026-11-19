@@ -23,9 +23,6 @@ use crate::ui_process::UiSupervisor;
 /// Result alias for startup work.
 pub type AppResult<T> = Result<T, Box<dyn std::error::Error>>;
 
-/// Frame budget floor so a 240 fps request cannot spin at 100 %.
-const MIN_FRAME_MS: u64 = 1000 / 240;
-
 type DragPeer = (usize, (i32, i32), (i32, i32));
 
 /// Everything the pet process owns.
@@ -37,6 +34,7 @@ pub struct PetApp {
     /// Loaded lazily: scanning 64 archives must not delay the first frame.
     catalog: Option<Catalog>,
     roles: Vec<Role>,
+    peer_centers: Vec<(f32, f32)>,
     /// Window creation must run inside the active winit event loop.
     roles_dirty: bool,
     tray: Option<Tray>,
@@ -107,6 +105,7 @@ impl PetApp {
             cache,
             catalog,
             roles: Vec::new(),
+            peer_centers: Vec::new(),
             roles_dirty: true,
             tray,
             ipc,
@@ -513,6 +512,7 @@ impl PetApp {
         self.drag_peer = None;
         self.roles = new_roles;
         if self.roles.is_empty() {
+            self.gpu = None;
             warn!("no roles left after reload");
         }
         self.persist_now();
@@ -766,27 +766,27 @@ impl PetApp {
         }
     }
 
-    fn tick_roles(&mut self) {
-        let dt = self.last_frame.elapsed().as_secs_f32().clamp(0.001, 0.1);
-        self.last_frame = Instant::now();
+    fn tick_roles(&mut self, frame_start: Instant) {
+        let dt = (frame_start - self.last_frame)
+            .as_secs_f32()
+            .clamp(0.001, 0.1);
+        self.last_frame = frame_start;
         let now = self.now();
         let now_ms = self.now_ms();
-        let fps = self.config.fps.max(30);
-        let frame_budget_ms = (1000 / fps) as u64;
 
         // Peer centers for mutual gaze (recomputed every tick, cheap for ≤8 roles).
-        let centers: Vec<(f32, f32)> = self.roles.iter().map(Role::center).collect();
+        self.peer_centers.clear();
+        self.peer_centers
+            .extend(self.roles.iter().map(Role::center));
 
-        for index in 0..self.roles.len() {
-            let peers: Vec<(f32, f32)> = centers
+        for (index, role) in self.roles.iter_mut().enumerate() {
+            let own = self.peer_centers[index];
+            let nearest_peer = self
+                .peer_centers
                 .iter()
                 .enumerate()
                 .filter(|(other, _)| *other != index)
-                .map(|(_, center)| *center)
-                .collect();
-            let own = centers[index];
-            let nearest_peer = peers
-                .iter()
+                .map(|(_, center)| center)
                 .min_by(|left, right| {
                     let left_distance = (left.0 - own.0).powi(2) + (left.1 - own.1).powi(2);
                     let right_distance = (right.0 - own.0).powi(2) + (right.1 - own.1).powi(2);
@@ -795,30 +795,16 @@ impl PetApp {
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .copied();
-            let role = &mut self.roles[index];
             role.advance_model(dt);
             let idle_seconds = now; // the behavior keeps its own interaction clock
             role.tick_behavior(now, dt, idle_seconds, nearest_peer, own);
             role.guard_topmost(self.config.game_topmost);
             role.poll_passthrough(&self.config, now_ms);
         }
-        let _ = frame_budget_ms;
-
         // Persist while dragging-induced changes settle.
         if self.config_dirty && self.last_config_save.elapsed() > Duration::from_secs(2) {
             self.persist_now();
         }
-    }
-
-    fn request_frames(&self, event_loop: &ActiveEventLoop) {
-        for role in &self.roles {
-            role.window.request_redraw();
-        }
-        let fps = self.config.fps.clamp(30, 240);
-        let budget = Duration::from_millis(((1000 / fps) as u64).max(MIN_FRAME_MS));
-        event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
-            Instant::now() + budget,
-        ));
     }
 
     fn show_radial_menu(&mut self, role_index: usize) {
@@ -1006,8 +992,18 @@ impl ApplicationHandler for PetApp {
         }
         self.drain_tray();
         self.ui.tick();
-        self.tick_roles();
-        self.request_frames(event_loop);
+        let interval = Duration::from_secs_f64(1.0 / f64::from(self.config.fps.clamp(30, 240)));
+        let now = Instant::now();
+        // Input and redraw events can wake winit before WaitUntil fires.
+        if now >= self.last_frame + interval {
+            self.tick_roles(now);
+            for role in &mut self.roles {
+                role.request_frame();
+            }
+        }
+        event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+            self.last_frame + interval,
+        ));
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {

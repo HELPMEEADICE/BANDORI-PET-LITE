@@ -1121,15 +1121,22 @@ impl SceneRenderer {
         textures: &[DecodedTexture],
         matrix: Matrix44,
     ) -> Result<ModelGpu, RenderError> {
-        ModelGpu::new(&self.gpu, &self.renderer, meshes, textures, matrix)
+        let model = ModelGpu::new(&self.gpu, &self.renderer, meshes, textures, matrix);
+        // Texture uploads also need a submission when the role starts hidden.
+        self.gpu.queue.submit([]);
+        model
     }
 
-    /// Renders one frame of `model` into the swapchain.
-    pub fn render(&mut self, model: &ModelGpu) -> Result<(), RenderError> {
+    /// Renders one frame, uploading new meshes once a surface frame is available.
+    pub fn render(
+        &mut self,
+        model: &mut ModelGpu,
+        meshes: Option<&[Moc3DrawableMesh]>,
+    ) -> Result<(), RenderError> {
         if self.fused {
             return Ok(());
         }
-        let result = self.render_inner(model);
+        let result = self.render_inner(model, meshes);
         match &result {
             Ok(()) => {
                 self.consecutive_failures = 0;
@@ -1153,8 +1160,19 @@ impl SceneRenderer {
         result
     }
 
-    fn render_inner(&mut self, model: &ModelGpu) -> Result<(), RenderError> {
+    fn render_inner(
+        &mut self,
+        model: &mut ModelGpu,
+        meshes: Option<&[Moc3DrawableMesh]>,
+    ) -> Result<(), RenderError> {
         let frame = self.surface.acquire()?;
+        // Queue writes retain staging memory until submit. Failed acquisitions
+        // and hidden windows must not enqueue a stream of unsubmitted uploads.
+        if let Some(meshes) = meshes {
+            if let Err(error) = model.update_meshes(&self.gpu, &self.renderer, meshes) {
+                warn!(%error, "mesh upload failed");
+            }
+        }
         let frame_view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -1175,7 +1193,7 @@ impl SceneRenderer {
                 self.opacity,
             );
         }
-        encode_frame(
+        if let Err(error) = encode_frame(
             &mut encoder,
             &self.renderer,
             model,
@@ -1183,7 +1201,11 @@ impl SceneRenderer {
             self.intermediate.as_ref(),
             &self.blit,
             show_overlay.then_some(&self.overlay),
-        )?;
+        ) {
+            // Retire any queued writes even when this frame cannot be encoded.
+            self.gpu.queue.submit([]);
+            return Err(error);
+        }
 
         self.gpu.queue.submit([encoder.finish()]);
         self.gpu.queue.present(frame);

@@ -106,8 +106,17 @@ impl ApplicationHandler for Scenario {
                 "startup stole focus"
             );
             assert_eq!(role.window.is_visible(), Some(!config.hide_live2d_model));
+            if config.hide_live2d_model {
+                for _ in 0..10 {
+                    role.advance_model(1.0 / 60.0);
+                    assert!(!role.render());
+                }
+                assert_eq!(role.renderer.frames(), 0);
+            }
             config.hide_live2d_model = false;
             role.apply_display_settings(&config);
+            assert_eq!(role.window.is_visible(), Some(true));
+            assert!(role.renderer.frames() > 0);
 
             // Visibility and other winit flag changes used to erase the native
             // NOACTIVATE/TOOLWINDOW/LAYERED styles and cached click-through state.
